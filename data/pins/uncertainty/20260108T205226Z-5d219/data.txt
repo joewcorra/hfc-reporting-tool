@@ -1,0 +1,10 @@
+file: uncertainty.rds
+file_size: 393
+pin_hash: 5d21961ef5adf5bc
+type: rds
+title: 'uncertainty: a pinned 48 x 3 data frame'
+description: ~
+tags: ~
+urls: ~
+created: 20260108T205226Z
+api_version: 1

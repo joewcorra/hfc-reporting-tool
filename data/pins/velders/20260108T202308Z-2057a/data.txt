@@ -1,0 +1,10 @@
+file: velders.rds
+file_size: 304
+pin_hash: 2057a089af6b3b52
+type: rds
+title: 'velders: a pinned 9 x 2 data frame'
+description: ~
+tags: ~
+urls: ~
+created: 20260108T202308Z
+api_version: 1
