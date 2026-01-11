@@ -1,0 +1,10 @@
+file: mixture_compositions.rds
+file_size: 290
+pin_hash: 7c0de17d7afc3093
+type: rds
+title: 'mixture_compositions: a pinned 15 x 3 data frame'
+description: ~
+tags: ~
+urls: ~
+created: 20260110T141227Z
+api_version: 1
