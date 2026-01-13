@@ -1,10 +1,10 @@
 file: edgar.rds
-file_size: 543027
-pin_hash: e0e955ae22bb2621
+file_size: 541197
+pin_hash: e6292535307c695c
 type: rds
 title: 'edgar: a pinned 133728 x 10 data frame'
 description: ~
 tags: ~
 urls: ~
-created: 20260108T175045Z
+created: 20260113T125906Z
 api_version: 1
