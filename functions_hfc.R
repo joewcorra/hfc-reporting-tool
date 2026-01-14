@@ -15,7 +15,7 @@ applications <- pin_read(hfc_board, "applications")
 
 # Tabs 3A, 3B, 3C----------------------------------
 
-# need separate dfs for imports, exports, production & destruction
+# need separate dfs for 1) imports, 2) exports, 3) production & destruction
 total_hfc <- user_input %>% 
   filter(type == "mixture") %>%
   left_join(mixture_compositions, by = c("hfc" = "mixture")) %>%
