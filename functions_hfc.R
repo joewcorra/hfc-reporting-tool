@@ -1,6 +1,8 @@
 library(tidyverse)
 library(pins)
-library(gt)
+library(treemapify)
+library(viridis)
+
 
 hfc_board <- board_folder("data/pins")
 
@@ -33,7 +35,7 @@ user_input <- "usa"
 
 scoping <- edgar %>%
   left_join(applications, by = "sub_application") %>%
-  filter(c_group == user_input) %>%
+  filter(name == user_input) %>%
   mutate(co2_eq = gwp * hfc_emissions) %>%
   group_by(year, application, sub_application) %>%
   summarize(mmt_co2_eq = sum(co2_eq, na.rm = TRUE) / 10^6) %>%
