@@ -7,6 +7,12 @@
 #    https://shiny.posit.co/
 #
 library(shiny)
+library(dplyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+library(treemapify)
+library(viridis)
 
 # Function to calculate HFC totals from user input
 calculate_hfc_totals <- function(user_input, categories) {
@@ -169,7 +175,15 @@ server <- function(input, output, session) {
   output$timeseries_table <- DT::renderDT({
     scoping_data() %>%
       arrange(year, application, sub_application)
-  })
+  }, 
+  server = FALSE,
+  extensions = 'Buttons', 
+  options = list(
+    dom = 'Bfrtip', 
+    buttons = list(
+    list(extend = 'copy', exportOptions = list(modifier = list(page = 'all', search = 'none'))), 
+    list(extend = 'csv', exportOptions = list(modifier = list(page = 'all', search = 'none')))
+  )))
   
   output$line_plot <- renderPlot({
     data_for_plot <- scoping_data() %>%
