@@ -1,18 +1,15 @@
-#
-# This is a Shiny web application. You can run the application by clicking
-# the 'Run App' button above.
-#
-# Find out more about building applications with Shiny here:
-#
-#    https://shiny.posit.co/
-#
 library(shiny)
 library(dplyr)
-library(stringr)
-library(forcats)
+library(tidyr)
 library(ggplot2)
 library(treemapify)
 library(viridis)
+library(DT)
+library(rhandsontable)
+
+# Convert year to numeric
+edgar <- edgar %>%
+  mutate(year = as.numeric(as.character(year)))
 
 # Function to calculate HFC totals from user input
 calculate_hfc_totals <- function(user_input, categories) {
@@ -89,11 +86,13 @@ ui <- fluidPage(
                           DT::DTOutput("timeseries_table")
                    )
                  ),
+                 br(),
                  fluidRow(
                    column(12,
                           plotOutput("line_plot", height = "400px")
                    )
                  ),
+                 br(),
                  fluidRow(
                    column(6,
                           plotOutput("treemap_app", height = "400px")
@@ -107,33 +106,39 @@ ui <- fluidPage(
         # Tab 2: Production & Destruction
         tabPanel("Production & Destruction",
                  br(),
-                 fileInput("prod_file", "Upload Production & Destruction Data (CSV)",
-                           accept = c("text/csv", "text/comma-separated-values,text/plain", ".csv")),
-                 helpText("CSV format: year, hfc, type, category, quantity"),
-                 helpText("Categories: produced, feedstock_produced, destroyed"),
+                 h4("Enter Production & Destruction Data"),
+                 helpText("Enter data in the table below. Right-click for options to add/remove rows."),
+                 rHandsontableOutput("prod_input_table"),
                  br(),
+                 actionButton("calc_prod", "Calculate Totals", class = "btn-primary"),
+                 br(), br(),
+                 h4("Calculated Totals"),
                  tableOutput("prod_table")
         ),
         
         # Tab 3: Imports
         tabPanel("Imports",
                  br(),
-                 fileInput("imports_file", "Upload Imports Data (CSV)",
-                           accept = c("text/csv", "text/comma-separated-values,text/plain", ".csv")),
-                 helpText("CSV format: year, hfc, type, category, quantity"),
-                 helpText("Categories: new, recovered, feedstock"),
+                 h4("Enter Imports Data"),
+                 helpText("Enter data in the table below. Right-click for options to add/remove rows."),
+                 rHandsontableOutput("imports_input_table"),
                  br(),
+                 actionButton("calc_imports", "Calculate Totals", class = "btn-primary"),
+                 br(), br(),
+                 h4("Calculated Totals"),
                  tableOutput("imports_table")
         ),
         
         # Tab 4: Exports
         tabPanel("Exports",
                  br(),
-                 fileInput("exports_file", "Upload Exports Data (CSV)",
-                           accept = c("text/csv", "text/comma-separated-values,text/plain", ".csv")),
-                 helpText("CSV format: year, hfc, type, category, quantity"),
-                 helpText("Categories: new, recovered"),
+                 h4("Enter Exports Data"),
+                 helpText("Enter data in the table below. Right-click for options to add/remove rows."),
+                 rHandsontableOutput("exports_input_table"),
                  br(),
+                 actionButton("calc_exports", "Calculate Totals", class = "btn-primary"),
+                 br(), br(),
+                 h4("Calculated Totals"),
                  tableOutput("exports_table")
         )
       ),
@@ -144,6 +149,31 @@ ui <- fluidPage(
 
 # Server
 server <- function(input, output, session) {
+  
+  # Create initial empty dataframes for input tables (without type column)
+  initial_prod <- data.frame(
+    year = rep(2020L, 5),
+    hfc = rep("", 5),
+    category = rep("produced", 5),
+    quantity = rep(0, 5),
+    stringsAsFactors = FALSE
+  )
+  
+  initial_imports <- data.frame(
+    year = rep(2020L, 5),
+    hfc = rep("", 5),
+    category = rep("new", 5),
+    quantity = rep(0, 5),
+    stringsAsFactors = FALSE
+  )
+  
+  initial_exports <- data.frame(
+    year = rep(2020L, 5),
+    hfc = rep("", 5),
+    category = rep("new", 5),
+    quantity = rep(0, 5),
+    stringsAsFactors = FALSE
+  )
   
   # Reactive data processing for scoping
   scoping_data <- reactive({
@@ -166,7 +196,7 @@ server <- function(input, output, session) {
     req(scoping_data())
     apps <- unique(scoping_data()$application)
     n_apps <- length(apps)
-    colors <- viridis(n_apps, option = "D")
+    colors <- viridis(n_apps, option = "mako", begin = 0, end = 0.8)
     names(colors) <- apps
     colors
   })
@@ -174,16 +204,21 @@ server <- function(input, output, session) {
   # Scoping Statement Outputs
   output$timeseries_table <- DT::renderDT({
     scoping_data() %>%
-      arrange(year, application, sub_application)
+      arrange(year, application, sub_application) %>%
+      mutate(
+        year = as.integer(year),
+        mmt_co2_eq = round(mmt_co2_eq, 2)
+      )
   }, 
   server = FALSE,
-  extensions = 'Buttons', 
+  extensions = 'Buttons',
   options = list(
-    dom = 'Bfrtip', 
+    dom = 'Bfrtip',
     buttons = list(
-    list(extend = 'copy', exportOptions = list(modifier = list(page = 'all', search = 'none'))), 
-    list(extend = 'csv', exportOptions = list(modifier = list(page = 'all', search = 'none')))
-  )))
+      list(extend = 'copy', exportOptions = list(modifier = list(page = 'all'))),
+      list(extend = 'csv', exportOptions = list(modifier = list(page = 'all')))
+    )
+  ))
   
   output$line_plot <- renderPlot({
     data_for_plot <- scoping_data() %>%
@@ -220,7 +255,7 @@ server <- function(input, output, session) {
     
     ggplot(data_for_treemap, aes(area = mmt_co2_eq, fill = application, label = application)) +
       geom_treemap() +
-      geom_treemap_text(colour = "white", place = "centre", size = 12, grow = TRUE) +
+      geom_treemap_text(colour = "white", place = "centre", size = 12, grow = TRUE, reflow = TRUE) +
       scale_fill_manual(values = app_colors()) +
       labs(
         title = paste("By Application (", most_recent_year, ")", sep = ""),
@@ -257,15 +292,42 @@ server <- function(input, output, session) {
       )
   })
   
-  # Production & Destruction reactive
-  prod_data <- reactive({
-    req(input$prod_file)
+  # Production & Destruction
+  output$prod_input_table <- renderRHandsontable({
+    if (!is.null(input$prod_input_table)) {
+      df <- hot_to_r(input$prod_input_table)
+    } else {
+      df <- initial_prod
+    }
     
-    user_input <- read.csv(input$prod_file$datapath, stringsAsFactors = FALSE)
+    # Ensure year is integer
+    df$year <- as.integer(df$year)
     
-    # Validate categories
+    rhandsontable(df, rowHeaders = NULL) %>%
+      hot_col("year", type = "numeric", format = "0") %>%
+      hot_col("hfc", type = "dropdown", 
+              source = c("", unique(c(mixture_compositions$component, mixture_compositions$mixture)))) %>%
+      hot_col("category", type = "dropdown", 
+              source = c("produced", "feedstock_produced", "destroyed")) %>%
+      hot_col("quantity", type = "numeric")
+  })
+  
+  prod_data <- eventReactive(input$calc_prod, {
+    req(input$prod_input_table)
+    user_input <- hot_to_r(input$prod_input_table)
+    user_input <- user_input[user_input$hfc != "" & !is.na(user_input$quantity), ]
+    
+    if (nrow(user_input) == 0) {
+      return(data.frame(year = integer(), component = character(), 
+                        produced = numeric(), feedstock_produced = numeric(), 
+                        destroyed = numeric()))
+    }
+    
+    # Add type column based on HFC
+    user_input <- user_input %>%
+      mutate(type = ifelse(hfc %in% mixture_compositions$mixture, "mixture", "component"))
+    
     expected_categories <- c("produced", "feedstock_produced", "destroyed")
-    
     calculate_hfc_totals(user_input, expected_categories)
   })
   
@@ -273,15 +335,41 @@ server <- function(input, output, session) {
     prod_data()
   })
   
-  # Imports reactive
-  imports_data <- reactive({
-    req(input$imports_file)
+  # Imports
+  output$imports_input_table <- renderRHandsontable({
+    if (!is.null(input$imports_input_table)) {
+      df <- hot_to_r(input$imports_input_table)
+    } else {
+      df <- initial_imports
+    }
     
-    user_input <- read.csv(input$imports_file$datapath, stringsAsFactors = FALSE)
+    # Ensure year is integer
+    df$year <- as.integer(df$year)
     
-    # Validate categories
+    rhandsontable(df, rowHeaders = NULL) %>%
+      hot_col("year", type = "numeric", format = "0") %>%
+      hot_col("hfc", type = "dropdown", 
+              source = c("", unique(c(mixture_compositions$component, mixture_compositions$mixture)))) %>%
+      hot_col("category", type = "dropdown", 
+              source = c("new", "recovered", "feedstock")) %>%
+      hot_col("quantity", type = "numeric")
+  })
+  
+  imports_data <- eventReactive(input$calc_imports, {
+    req(input$imports_input_table)
+    user_input <- hot_to_r(input$imports_input_table)
+    user_input <- user_input[user_input$hfc != "" & !is.na(user_input$quantity), ]
+    
+    if (nrow(user_input) == 0) {
+      return(data.frame(year = integer(), component = character(), 
+                        new = numeric(), recovered = numeric(), feedstock = numeric()))
+    }
+    
+    # Add type column based on HFC
+    user_input <- user_input %>%
+      mutate(type = ifelse(hfc %in% mixture_compositions$mixture, "mixture", "component"))
+    
     expected_categories <- c("new", "recovered", "feedstock")
-    
     calculate_hfc_totals(user_input, expected_categories)
   })
   
@@ -289,15 +377,41 @@ server <- function(input, output, session) {
     imports_data()
   })
   
-  # Exports reactive
-  exports_data <- reactive({
-    req(input$exports_file)
+  # Exports
+  output$exports_input_table <- renderRHandsontable({
+    if (!is.null(input$exports_input_table)) {
+      df <- hot_to_r(input$exports_input_table)
+    } else {
+      df <- initial_exports
+    }
     
-    user_input <- read.csv(input$exports_file$datapath, stringsAsFactors = FALSE)
+    # Ensure year is integer
+    df$year <- as.integer(df$year)
     
-    # Validate categories
+    rhandsontable(df, rowHeaders = NULL) %>%
+      hot_col("year", type = "numeric", format = "0") %>%
+      hot_col("hfc", type = "dropdown", 
+              source = c("", unique(c(mixture_compositions$component, mixture_compositions$mixture)))) %>%
+      hot_col("category", type = "dropdown", 
+              source = c("new", "recovered")) %>%
+      hot_col("quantity", type = "numeric")
+  })
+  
+  exports_data <- eventReactive(input$calc_exports, {
+    req(input$exports_input_table)
+    user_input <- hot_to_r(input$exports_input_table)
+    user_input <- user_input[user_input$hfc != "" & !is.na(user_input$quantity), ]
+    
+    if (nrow(user_input) == 0) {
+      return(data.frame(year = integer(), component = character(), 
+                        new = numeric(), recovered = numeric()))
+    }
+    
+    # Add type column based on HFC
+    user_input <- user_input %>%
+      mutate(type = ifelse(hfc %in% mixture_compositions$mixture, "mixture", "component"))
+    
     expected_categories <- c("new", "recovered")
-    
     calculate_hfc_totals(user_input, expected_categories)
   })
   
