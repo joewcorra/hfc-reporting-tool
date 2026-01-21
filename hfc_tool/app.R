@@ -207,7 +207,7 @@ server <- function(input, output, session) {
       arrange(year, application, sub_application) %>%
       mutate(
         year = as.integer(year),
-        mmt_co2_eq = round(mmt_co2_eq, 2)
+        mmt_co2_eq = round(mmt_co2_eq, 4)
       )
   }, 
   server = FALSE,
@@ -304,12 +304,13 @@ server <- function(input, output, session) {
     df$year <- as.integer(df$year)
     
     rhandsontable(df, rowHeaders = NULL) %>%
-      hot_col("year", type = "numeric", format = "0") %>%
-      hot_col("hfc", type = "dropdown", 
+      hot_col("year", type = "numeric", format = "0", colWidths = 75) %>%
+      hot_col("hfc", type = "dropdown", , colWidths = 225,
               source = c("", unique(c(mixture_compositions$component, mixture_compositions$mixture)))) %>%
-      hot_col("category", type = "dropdown", 
+      hot_col("category", type = "dropdown", , colWidths = 150,
               source = c("produced", "feedstock_produced", "destroyed")) %>%
-      hot_col("quantity", type = "numeric")
+      hot_col("quantity", type = "numeric", , colWidths = 75) %>%
+      hot_table(highlightRow = TRUE, highlightCol = TRUE)
   })
   
   prod_data <- eventReactive(input$calc_prod, {
@@ -347,12 +348,13 @@ server <- function(input, output, session) {
     df$year <- as.integer(df$year)
     
     rhandsontable(df, rowHeaders = NULL) %>%
-      hot_col("year", type = "numeric", format = "0") %>%
-      hot_col("hfc", type = "dropdown", 
+      hot_col("year", type = "numeric", format = "0", colWidths = 75) %>%
+      hot_col("hfc", type = "dropdown", colWidths = 225,
               source = c("", unique(c(mixture_compositions$component, mixture_compositions$mixture)))) %>%
-      hot_col("category", type = "dropdown", 
+      hot_col("category", type = "dropdown", colWidths = 150,
               source = c("new", "recovered", "feedstock")) %>%
-      hot_col("quantity", type = "numeric")
+      hot_col("quantity", type = "numeric", colWidths = 75) %>%
+      hot_table(highlightRow = TRUE, highlightCol = TRUE)
   })
   
   imports_data <- eventReactive(input$calc_imports, {
@@ -389,12 +391,13 @@ server <- function(input, output, session) {
     df$year <- as.integer(df$year)
     
     rhandsontable(df, rowHeaders = NULL) %>%
-      hot_col("year", type = "numeric", format = "0") %>%
-      hot_col("hfc", type = "dropdown", 
+      hot_col("year", type = "numeric", format = "0", colWidths = 75) %>%
+      hot_col("hfc", type = "dropdown", colWidths = 225,
               source = c("", unique(c(mixture_compositions$component, mixture_compositions$mixture)))) %>%
-      hot_col("category", type = "dropdown", 
+      hot_col("category", type = "dropdown", , colWidths = 150,
               source = c("new", "recovered")) %>%
-      hot_col("quantity", type = "numeric")
+      hot_col("quantity", type = "numeric", colWidths = 75) %>%
+    hot_table(highlightRow = TRUE, highlightCol = TRUE)
   })
   
   exports_data <- eventReactive(input$calc_exports, {
