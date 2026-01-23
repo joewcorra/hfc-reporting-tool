@@ -12,6 +12,7 @@ velders <- pin_read(hfc_board, "velders")
 uncertainty <- pin_read(hfc_board, "uncertainty")
 mixture_compositions <- pin_read(hfc_board, "mixture_compositions")
 applications <- pin_read(hfc_board, "applications")
+hfc_defaults <- pin_read(hfc_board, "hfc_defaults")
 
 # Tabs 3A, 3B, 3C----------------------------------
 
@@ -99,7 +100,7 @@ scoping <- edgar %>%
    installed_base_emission_factor = 
    percent_hfc_destroyed_eol = 
  
-   # This is a mess--need to clarify what all of these variables arefore and why
+   # This is a mess--need to clarify what all of these variables are for and why
    # they are needed. 
   
  previous_years_estimated <-

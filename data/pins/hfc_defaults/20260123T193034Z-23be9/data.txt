@@ -1,0 +1,10 @@
+file: hfc_defaults.rds
+file_size: 325
+pin_hash: 23be9f33ffbd490c
+type: rds
+title: 'hfc_defaults: a pinned 8 x 6 data frame'
+description: ~
+tags: ~
+urls: ~
+created: 20260123T193034Z
+api_version: 1
