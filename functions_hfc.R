@@ -32,12 +32,12 @@ total_hfc <- user_input %>%
     
 # Tab Emissions Scoping Statement------------------------------
 
-user_input <- "usa"
+user_input <- "united states"
 
 scoping <- edgar %>%
   left_join(applications, by = "sub_application") %>%
   filter(name == user_input) %>%
-  mutate(co2_eq = gwp * hfc_emissions) %>%
+  mutate(co2_eq = gwp * hfc_emissions * 1000) %>%
   group_by(year, application, sub_application) %>%
   summarize(mmt_co2_eq = sum(co2_eq, na.rm = TRUE) / 10^6) %>%
   ungroup() 
@@ -78,27 +78,30 @@ scoping <- edgar %>%
    ) %>%
    left_join(velders, by = "velders_application") %>%
    group_by(year, velders_application) %>%
+   # Replace default emission factor NA values with 1 
+   replace_na(list(emission_factor_dev_countries = 1)) %>%
    summarize(consumption_by_sector = sum(mmt_co2_eq / 
                                            emission_factor_dev_countries, 
-                                         na.rm = TRUE))
+                                         na.rm = TRUE)) %>%
+   ungroup()%>%
+   mutate(consumption_total = sum(consumption_by_sector, 
+                                  na.rm = TRUE), .by = year) %>%
+   mutate(consumotion_share = consumption_by_sector / consumption_total)
+
+
  
    
   
 # Refrigeration------------------------------------------------
  
  # Why is the current year computed separately?
- current_year <- 
+ current_year <- hfc_defaults %>%
    # data from 'refrigeration_data_summary':
    year = 
    hfc = 
    production = 
    imports = 
    exports = 
-   year_of_introduction = 
-   eq_sales_growth_rate =
-   eq_lifetime = 
-   installed_base_emission_factor = 
-   percent_hfc_destroyed_eol = 
  
    # This is a mess--need to clarify what all of these variables are for and why
    # they are needed. 
