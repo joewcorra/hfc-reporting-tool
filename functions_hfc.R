@@ -1,7 +1,5 @@
 library(tidyverse)
 library(pins)
-library(treemapify)
-library(viridis)
 
 
 hfc_board <- board_folder("data/pins")
@@ -62,7 +60,8 @@ scoping <- edgar %>%
    mutate(velders_application = case_when(
      sub_application == "domestic refrigeration" ~ "domestic refrigeration", 
      sub_application %in% c("commercial refrigeration",
-                            "industrial refrigeration") ~ "commercial and industrial refrigeration",
+                            "industrial refrigeration", 
+                            "transport refrigeration") ~ "commercial and industrial refrigeration",
      sub_application == "mobile air conditioning" ~ "mobile air conditioning",
      sub_application == "stationary air conditioning" ~ "stationary air conditioning",
      sub_application == "aerosols" ~ "aerosols",
@@ -77,35 +76,65 @@ scoping <- edgar %>%
      sub_application %in% c("other f-gas use", "other ods") ~ "other")
    ) %>%
    left_join(velders, by = "velders_application") %>%
-   group_by(year, velders_application) %>%
+   mutate(meta_application = case_when(
+     str_detect(velders_application, "refrigeration|conditioning") ~ "refrigeration and air conditioning",
+     str_detect(velders_application, "foam") ~ "foam",
+     velders_application == "fire extinguishers" ~ "fire protection",
+     .default = velders_application)) %>%
+   group_by(year, meta_application, velders_application) %>%
    # Replace default emission factor NA values with 1 
    replace_na(list(emission_factor_dev_countries = 1)) %>%
    summarize(consumption_by_sector = sum(mmt_co2_eq / 
                                            emission_factor_dev_countries, 
                                          na.rm = TRUE)) %>%
-   ungroup()%>%
+   ungroup() %>%
    mutate(consumption_total = sum(consumption_by_sector, 
                                   na.rm = TRUE), .by = year) %>%
-   mutate(consumotion_share = consumption_by_sector / consumption_total)
-
-
- 
+   group_by(year, meta_application) %>%
+   summarize(consumption_share = sum(consumption_by_sector) / sum(consumption_total)) %>%
+   ungroup()
    
   
 # Refrigeration------------------------------------------------
  
- # Why is the current year computed separately?
- current_year <- hfc_defaults %>%
-   # data from 'refrigeration_data_summary':
-   year = 
-   hfc = 
-   production = 
-   imports = 
-   exports = 
+ # Calculate net imports, exports, and production & destruction
+refrigeration_imports <- imports_data %>% 
+   group_by(year, component) %>%
+   summarize(refrigeration_imports = new + recovered - feedstock)
  
-   # This is a mess--need to clarify what all of these variables are for and why
-   # they are needed. 
-  
+ refrigeration_exports <- exports_data %>% 
+   group_by(year, component) %>%
+   summarize(refrigeration_exports = new + recovered)
+ 
+ refrigeration_prod <- prod_data %>% 
+   group_by(year, component) %>%
+   summarize(refrigeration_prod = produced - feedstock_produced - destroyed)
+ 
+ # Join all refrigeration data
+ refrigeration <- list(
+   refrigeration_imports,
+   refrigeration_exports,
+   refrigeration_prod) %>%
+   reduce(full_join, by = c("year", "component")) %>%
+   mutate(total_new_agent = refrigeration_imports + 
+            refrigeration_prod - 
+          refrigeration_exports)
+   left_join(hfc_defaults, by = c("component" = "hfc")) %>%
+     mutate(end_of_life_substance = ,
+            end_of_life_destruction = ,
+            end_of_life_release = ,
+            bank = ,
+            emissions = ,
+            emissions_upper_estimate = ,
+            emissions_lower_estimate = ,
+            bank_emissions = bank * emissions_factor_installed_base,
+            retired_eq_emissions = ,
+            # sum???? = bank_emissions + retired_eq_emissions, 
+            bank_emissions_ratio = bank / emissions)
+
+  lower_estimate = consumption_share * (1 - uncertainty)
+  upper_estimate = consumption_share * (1 + uncertainty)
+   
  previous_years_estimated <-
    #
    year = 
