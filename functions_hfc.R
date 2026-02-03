@@ -11,22 +11,6 @@ uncertainty <- pin_read(hfc_board, "uncertainty")
 mixture_compositions <- pin_read(hfc_board, "mixture_compositions")
 applications <- pin_read(hfc_board, "applications")
 hfc_defaults <- pin_read(hfc_board, "hfc_defaults")
-
-# Tabs 3A, 3B, 3C----------------------------------
-
-# need separate dfs for 1) imports, 2) exports, 3) production & destruction
-total_hfc <- user_input %>% 
-  filter(type == "mixture") %>%
-  left_join(mixture_compositions, by = c("hfc" = "mixture")) %>%
-  mutate(component_quantity = fraction * quantity) %>%
-  group_by(component) %>%
-  summarize(total_hfc_mixture = sum(component_quantity, na.rm = TRUE)) %>%
-  ungroup() %>%
-  left_join(user_input %>% 
-              filter(type == "component") %>%
-              rename(total_hfc_component = quantity), 
-            by = c("component" = "hfc")) %>%
-  mutate(total_hfc = total_hfc_component + total_hfc_mixture)
     
 # Tab Emissions Scoping Statement------------------------------
 
@@ -41,8 +25,7 @@ scoping <- edgar %>%
   ungroup() 
 
  scoping %>%
-   pivot_wider(names_from = year, values_from = mmt_co2_eq) %>%
-   gt()
+   pivot_wider(names_from = year, values_from = mmt_co2_eq) 
  # next: make this table pretty; get subtotals by application & annual totals
  
  
@@ -50,12 +33,7 @@ scoping <- edgar %>%
  # pie (current year by subapplication)
  
  # Emission Model Assumptions---------------------------------
- 
- # Need to review all of these. Some are divided by the Velders emissions 
- # factors, and some are not. Some applications are aggregated into what seem to be 
- # arbitrary groups; others are unchanged from the scoping statement data. 
- # need to add all missing apps to velders_applications with factor = 1.
- 
+
  abs_hfc_consumption <- scoping %>%
    mutate(velders_application = case_when(
      sub_application == "domestic refrigeration" ~ "domestic refrigeration", 
@@ -100,15 +78,15 @@ scoping <- edgar %>%
  # Calculate net imports, exports, and production & destruction
 refrigeration_imports <- imports_data %>% 
    group_by(year, component) %>%
-   summarize(refrigeration_imports = new + recovered - feedstock)
+   summarize(imports = new + recovered - feedstock)
  
  refrigeration_exports <- exports_data %>% 
    group_by(year, component) %>%
-   summarize(refrigeration_exports = new + recovered)
+   summarize(exports = new + recovered)
  
  refrigeration_prod <- prod_data %>% 
    group_by(year, component) %>%
-   summarize(refrigeration_prod = produced - feedstock_produced - destroyed)
+   summarize(prod = produced - feedstock_produced - destroyed)
  
  # Join all refrigeration data
  refrigeration <- list(
@@ -116,43 +94,31 @@ refrigeration_imports <- imports_data %>%
    refrigeration_exports,
    refrigeration_prod) %>%
    reduce(full_join, by = c("year", "component")) %>%
-   mutate(total_new_agent = refrigeration_imports + 
-            refrigeration_prod - 
-          refrigeration_exports)
    left_join(hfc_defaults, by = c("component" = "hfc")) %>%
-     mutate(end_of_life_substance = ,
-            end_of_life_destruction = ,
-            end_of_life_release = ,
-            bank = ,
-            emissions = ,
-            emissions_upper_estimate = ,
-            emissions_lower_estimate = ,
-            bank_emissions = bank * emissions_factor_installed_base,
-            retired_eq_emissions = ,
-            # sum???? = bank_emissions + retired_eq_emissions, 
-            bank_emissions_ratio = bank / emissions)
+   mutate(
+     ef_filling = emission_factor_filling,
+     ef_use = emission_factor_installed_base,
+     bank_end_of_year = 0, # default value to prevent error. redefined below.
+     bank_start_of_year =  lag(bank_end_of_year, n = 1, order_by = year, default = 0),
+     domestic_sales = imports + prod - exports, 
+     in_use_equip_emitted = bank_start_of_year * ef_use, 
+     servicing = pmax(domestic_sales, in_use_equip_emitted, na.rm = TRUE), 
+     new_equip_filling = domestic_sales - servicing,
+     filling_emissions = new_equip_filling * ef_filling, 
+     new_equip_contained = new_equip_filling - filling_emissions,
+     bank_contained = new_equip_contained + new_equip_imports - new_equip_exports,
+     retired_equip = lag(bank_contained, n = 10, order_by = year, default = 0),
+     reclaimed = retired_equip * destruction_at_end_of_life,
+     bank_end_of_year = bank_start_of_year + bank_contained + servicing - in_use_equip_emitted - retired_equip)
+ 
+ abs_hfc_consumption %>%
+   left_join(uncertainty) %>%
+   mutate(
+     # IS THIS RIGHT????????????????????????????
+     lower_estimate = consumption_share * (1 - uncertainty),
+     upper_estimate = consumption_share * (1 + uncertainty))
+ 
+ 
 
-  lower_estimate = consumption_share * (1 - uncertainty)
-  upper_estimate = consumption_share * (1 + uncertainty)
-   
- previous_years_estimated <-
-   #
-   year = 
-   hfc = 
-   production = 
-   agent_in_imports = 
-   agent_in_exports = 
-   total_new_agent = production + agent_in_imports + agent_in_exports
-   substance_in_eq_eol = 
-   destruction_in_eq_eol = substance_in_eq_eol * recovery
-   release_of_substabce_in_eq_eol = substance_in_eq_eol - destruction_in_eq_eol
-   bank = total_new_agent
-   emissions = bank * ef + release_of_substabce_in_eq_eol
-   uncertainty_upper_bound = 
-     uncertainty_lower_bound = 
-  emission_from_bank = bank * ef
-   emission_eq_eol = 
-     sum = emission_from_bank + emission_eq_eol
-   bankemissions = bank / emissions
    
    
