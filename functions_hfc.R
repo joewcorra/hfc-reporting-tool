@@ -73,10 +73,225 @@ scoping <- edgar %>%
    ungroup()
    
   
-# Refrigeration------------------------------------------------
+# Function: Kigali Data Emissions---------------------
+ 
+ # Initial values
+ init_bank_start <- 0
+ init_bank_end <- 0
+ init_bank_contained_history <- rep(0, 10)
+ 
+ # Helper function to calculate one year's values
+ # Now with a 'scenario' parameter: "point", "lower", or "upper"
+ calc_year <- function(prev_state, i, data, uncertainties, scenario = "point") {
+   # Extract current year's input values
+   ef_use <- data$emission_factor_installed_base[i]
+   imports <- data$imports[i]
+   prod <- data$prod[i]
+   exports <- data$exports[i]
+   destruction_rate <- data$destruction_at_end_of_life[i]
+   
+   # Extract uncertainties
+   u_kigali <- uncertainties$u_kigali[i]
+   u_ef_use <- uncertainties$u_ef_installed_base[i]
+   u_destruction <- uncertainties$u_destruction[i]
+   
+   # Apply uncertainty adjustments based on scenario
+   if (scenario == "lower") {
+     imports <- imports * (1 - u_kigali)
+     prod <- prod * (1 - u_kigali)
+     exports <- exports * (1 + u_kigali)  # Lower consumption = higher exports
+     ef_use <- ef_use * (1 - u_ef_use)
+     destruction_rate <- destruction_rate * (1 - u_destruction)
+   } else if (scenario == "upper") {
+     imports <- imports * (1 + u_kigali)
+     prod <- prod * (1 + u_kigali)
+     exports <- exports * (1 - u_kigali)  # Higher consumption = lower exports
+     ef_use <- ef_use * (1 + u_ef_use)
+     destruction_rate <- destruction_rate * (1 + u_destruction)
+   }
+   # else scenario == "point", use values as-is
+   
+   # Constants
+   ef_filling <- 0
+   new_equip_imports <- 0
+   new_equip_exports <- 0
+   
+   # Start calculations using previous state
+   bank_start_of_year <- prev_state$bank_end_of_year
+   
+   domestic_sales <- imports + prod - exports
+   in_use_equip_emissions <- bank_start_of_year * ef_use
+   servicing <- pmax(domestic_sales, in_use_equip_emissions, na.rm = TRUE)
+   new_equip_filling <- domestic_sales - servicing
+   filling_emissions <- new_equip_filling * ef_filling
+   new_equip_contained <- new_equip_filling - filling_emissions
+   bank_contained <- new_equip_contained + new_equip_imports - new_equip_exports
+   
+   # Get retired equipment from 10 years ago
+   retired_equip <- prev_state$bank_contained_history[1]
+   
+   reclaimed <- retired_equip * destruction_rate
+   destroyed <- 0
+   exported_used_equip <- 0
+   end_of_life_emissions <- retired_equip - reclaimed - destroyed - exported_used_equip
+   
+   bank_end_of_year <- bank_start_of_year + bank_contained + servicing - 
+     in_use_equip_emissions - retired_equip
+   
+   total_emissions <- filling_emissions + in_use_equip_emissions + end_of_life_emissions
+   
+   # Update bank_contained history
+   new_history <- c(prev_state$bank_contained_history[-1], bank_contained)
+   
+   # Return state for next iteration
+   list(
+     bank_end_of_year = bank_end_of_year,
+     bank_contained_history = new_history,
+     # Store all results
+     bank_start_of_year = bank_start_of_year,
+     domestic_sales = domestic_sales,
+     in_use_equip_emissions = in_use_equip_emissions,
+     servicing = servicing,
+     new_equip_filling = new_equip_filling,
+     filling_emissions = filling_emissions,
+     new_equip_contained = new_equip_contained,
+     bank_contained = bank_contained,
+     retired_equip = retired_equip,
+     reclaimed = reclaimed,
+     end_of_life_emissions = end_of_life_emissions,
+     bank_end_of_year = bank_end_of_year,
+     total_emissions = total_emissions
+   )
+ }
+ 
+ # Function to process one component with one scenario
+ process_component <- function(component_data, uncertainties, scenario = "point") {
+   # Set up initial state
+   initial_state <- list(
+     bank_end_of_year = init_bank_end,
+     bank_contained_history = init_bank_contained_history
+   )
+   
+   # Use accumulate to calculate all years
+   all_calcs <- purrr::accumulate(
+     1:nrow(component_data),
+     function(prev_state, i) {
+       calc_year(prev_state, i, component_data, uncertainties, scenario)
+     },
+     .init = initial_state
+   )[-1]
+   
+   # Extract results into dataframe
+   calculated_df <- purrr::map_dfr(all_calcs, function(state) {
+     tibble(
+       bank_start_of_year = state$bank_start_of_year,
+       domestic_sales = state$domestic_sales,
+       in_use_equip_emissions = state$in_use_equip_emissions,
+       servicing = state$servicing,
+       new_equip_filling = state$new_equip_filling,
+       filling_emissions = state$filling_emissions,
+       new_equip_contained = state$new_equip_contained,
+       bank_contained = state$bank_contained,
+       retired_equip = state$retired_equip,
+       reclaimed = state$reclaimed,
+       end_of_life_emissions = state$end_of_life_emissions,
+       bank_end_of_year = state$bank_end_of_year,
+       total_emissions = state$total_emissions
+     )
+   })
+   
+   # Combine with original data
+   bind_cols(component_data, calculated_df)
+ }
+ 
+ # Main processing function
+ process_all_components <- function(kigali_data, uncertainty_data) {
+   # Prepare uncertainty data
+   uncertainties <- kigali_data %>%
+     left_join(
+       uncertainty_data %>%
+         filter(parameter == "kigali data") %>%
+         select(hfc, u_kigali = uncertainty) %>%
+         mutate(hfc = str_remove_all(hfc, "-")),
+       by = c("component" = "hfc")
+     ) %>%
+     left_join(
+       uncertainty_data %>%
+         filter(parameter == "emission factor installed base") %>%
+         select(hfc, u_ef_installed_base = uncertainty) %>%
+         mutate(hfc = str_remove_all(hfc, "-")),
+       by = c("component" = "hfc")
+     ) %>%
+     left_join(
+       uncertainty_data %>%
+         filter(parameter == "% destroyed") %>%
+         select(hfc, u_destruction = uncertainty) %>%
+         mutate(hfc = str_remove_all(hfc, "-")),
+       by = c("component" = "hfc")
+     ) %>%
+     # Replace NAs with 0 (no uncertainty)
+     mutate(
+       u_kigali = replace_na(u_kigali, 0),
+       u_ef_installed_base = replace_na(u_ef_installed_base, 0),
+       u_destruction = replace_na(u_destruction, 0)
+     )
+   
+   # Split by component
+   component_list <- kigali_data %>%
+     arrange(component, year) %>%
+     group_by(component) %>%
+     group_split()
+   
+   # Get corresponding uncertainty chunks
+   uncertainty_list <- uncertainties %>%
+     arrange(component, year) %>%
+     group_by(component) %>%
+     group_split()
+   
+   # Process each scenario
+   point_estimates <- map2_dfr(
+     component_list, 
+     uncertainty_list,
+     ~process_component(.x, .y, scenario = "point")
+   )
+   
+   lower_estimates <- map2_dfr(
+     component_list, 
+     uncertainty_list,
+     ~process_component(.x, .y, scenario = "lower")
+   )
+   
+   upper_estimates <- map2_dfr(
+     component_list, 
+     uncertainty_list,
+     ~process_component(.x, .y, scenario = "upper")
+   )
+   
+   # Combine into single dataframe with uncertainty bounds
+   point_estimates %>%
+     mutate(
+       total_emissions_lower = lower_estimates$total_emissions,
+       total_emissions_upper = upper_estimates$total_emissions,
+       in_use_emissions_lower = lower_estimates$in_use_equip_emissions,
+       in_use_emissions_upper = upper_estimates$in_use_equip_emissions,
+       eol_emissions_lower = lower_estimates$end_of_life_emissions,
+       eol_emissions_upper = upper_estimates$end_of_life_emissions
+     ) %>%
+     mutate(
+       ef_filling = 0,
+       ef_use = emission_factor_installed_base,
+       new_equip_imports = 0,
+       new_equip_exports = 0,
+       destroyed = 0,
+       exported_used_equip = 0
+     )
+ }
+ 
+ # Refrigeration-----------------------------------------
+ 
  
  # Calculate net imports, exports, and production & destruction
-refrigeration_imports <- imports_data %>% 
+ refrigeration_imports <- imports_data %>% 
    group_by(year, component) %>%
    summarize(imports = new + recovered - feedstock) %>%
    ungroup()
@@ -97,57 +312,14 @@ refrigeration_imports <- imports_data %>%
    refrigeration_exports,
    refrigeration_prod) %>%
    reduce(full_join, by = c("year", "component")) %>%
-   left_join(hfc_defaults, by = c("component" = "hfc")) %>%
-   mutate(bank_start_of_year = 0, 
-          bank_end_of_year = 0) %>%
-   add_row(year = as_factor(2019), 
-           bank_start_of_year = 0, 
-           bank_end_of_year = 0) %>%
-   
-   mutate(
-     ef_filling = 0,
-     ef_use = emission_factor_installed_base,
-     # new_equip_imports and new_equip_exports need to be made user input values
-     new_equip_imports = 0, 
-     new_equip_exports = 0, 
-     domestic_sales = imports + prod - exports, 
-     bank_start_of_year = lag(bank_end_of_year, 
-                               n = 1,
-                               order_by = year),
-     in_use_equip_emissions = bank_start_of_year * ef_use, 
-     servicing = pmax(domestic_sales, 
-                      in_use_equip_emissions, na.rm = TRUE), 
-     new_equip_filling = domestic_sales - servicing,
-     filling_emissions = new_equip_filling * ef_filling, 
-     new_equip_contained = new_equip_filling - filling_emissions,
-
-     bank_contained = new_equip_contained + new_equip_imports - new_equip_exports,
-     retired_equip = 0,
-       # lag(bank_contained, 
-       #                   n = 10, 
-       #                   order_by = year, 
-       #                   default = 0),
-     reclaimed = retired_equip * destruction_at_end_of_life,
-     # Destroyed and exported in used equipment need to be made user input values
-     destroyed = 0, 
-     exported_used_equip = 0, 
-     end_of_life_emissions = retired_equip - reclaimed - destroyed - exported_used_equip, 
-     bank_end_of_year = bank_start_of_year + bank_contained + servicing - in_use_equip_emissions - retired_equip, 
-     total_emissions = filling_emissions + in_use_equip_emissions + end_of_life_emissions) %>%
-   left_join(abs_hfc_consumption %>% 
-               filter(meta_application == "refrigeration and air conditioning") %>%
-               select(-meta_application),
-             by = "year") %>%
-   left_join(uncertainty %>%
-               filter(parameter == "kigali data") %>%
-               select(-parameter) %>%
-               mutate(hfc = str_remove_all(hfc, "-")), 
-             by = c("component" = "hfc")) %>%
-   mutate(
-     lower_estimate = total_emissions * consumption_share * (1 - uncertainty),
-     upper_estimate = total_emissions * consumption_share * (1 + uncertainty))
+   left_join(hfc_defaults, by = c("component" = "hfc")) 
  
  
-
-   
-   
+ # Run the full processing
+ hfc_data_complete <- process_all_components(refrigeration, uncertainty)
+ 
+ # View result
+ hfc_data_complete %>%
+   select(year, component, total_emissions, total_emissions_lower, total_emissions_upper)
+ 
+ 

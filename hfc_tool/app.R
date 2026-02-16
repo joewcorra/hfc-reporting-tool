@@ -3,6 +3,7 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(treemapify)
+library(sunburstR)
 library(viridis)
 library(DT)
 library(rhandsontable)
@@ -98,7 +99,7 @@ ui <- fluidPage(
                           plotOutput("treemap_app", height = "400px")
                    ),
                    column(6,
-                          plotOutput("treemap_subapp", height = "400px")
+                          sunburstOutput("sunburst_subapp", height = "400px")
                    )
                  )
         ),
@@ -140,7 +141,23 @@ ui <- fluidPage(
                  br(), br(),
                  h4("Calculated Totals"),
                  tableOutput("exports_table")
+        ), 
+        
+        # Tab 5: Emissions
+        tabPanel(
+          "Emissions",
+          fluidRow(
+            column(
+              width = 12,
+              h3("HFC Emissions Estimates"),
+              actionButton("calculate_emissions", "Calculate Emissions", 
+                           class = "btn-primary"),
+              br(), br(),
+              DTOutput("emissions_table")
+            )
+          )
         )
+        
       ),
       width = 9
     )
@@ -267,29 +284,25 @@ server <- function(input, output, session) {
       )
   })
   
-  output$treemap_subapp <- renderPlot({
+  output$sunburst_subapp <- renderSunburst({
     most_recent_year <- max(scoping_data()$year, na.rm = TRUE)
     
-    data_for_treemap <- scoping_data() %>%
+    data_for_sunburst <- scoping_data() %>%
       filter(year == most_recent_year) %>%
+      # remove hyphens for Sunburst code
+      mutate(application = str_remove_all(application, "-"), 
+             sub_application = str_remove_all(sub_application, "-")) %>%
       group_by(application, sub_application) %>%
       summarize(mmt_co2_eq = sum(mmt_co2_eq, na.rm = TRUE), .groups = "drop") %>%
-      filter(mmt_co2_eq > 0)
-    
-    ggplot(data_for_treemap, aes(area = mmt_co2_eq, fill = application, 
-                                 label = sub_application, subgroup = application)) +
-      geom_treemap() +
-      geom_treemap_subgroup_border(colour = "white", size = 3) +
-      geom_treemap_text(colour = "white", place = "centre", size = 10, grow = TRUE) +
-      scale_fill_manual(values = app_colors()) +
-      labs(
-        title = paste("By Sub-Application (", most_recent_year, ")", sep = ""),
-        fill = "Application"
-      ) +
-      theme(
-        legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 12, hjust = 0.5)
-      )
+      filter(mmt_co2_eq > 0) %>%
+      mutate(path = paste(application, sub_application, sep = "-")) %>%
+      select(path, mmt_co2_eq)
+    sunburst(
+      data_for_sunburst,
+      legend = list(w = 150, h = 25, s = 5, t = 25),
+      colors = list(range = unname(app_colors())),
+      withD3 = TRUE
+    )
   })
   
   # Production & Destruction
@@ -421,6 +434,27 @@ server <- function(input, output, session) {
   output$exports_table <- renderTable({
     exports_data()
   })
+  
+  output$emissions_table <- renderDT({
+    # Only render when button is clicked
+    req(input$calculate_emissions)
+    
+    # Your emissions data will go here
+    # For now, placeholder structure
+    datatable(
+      hfc_data_complete %>%
+        select(year, component, total_emissions, total_emissions_lower, total_emissions_upper),
+      options = list(
+        dom = 'Bfrtip',
+        buttons = c('copy', 'csv', 'excel'),
+        pageLength = 25,
+        scrollX = TRUE
+      ),
+      extensions = 'Buttons',
+      rownames = FALSE
+    )
+  })
+  
 }
 
 # Run the app
