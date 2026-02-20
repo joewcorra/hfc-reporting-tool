@@ -287,39 +287,39 @@ scoping <- edgar %>%
      )
  }
  
- # Refrigeration-----------------------------------------
+ # Emssions-----------------------------------------
  
  
  # Calculate net imports, exports, and production & destruction
- refrigeration_imports <- imports_data %>% 
-   group_by(year, component) %>%
+ imports <- kigali_data %>% 
+   group_by(year, flow, component) %>%
    summarize(imports = new + recovered - feedstock) %>%
    ungroup()
  
- refrigeration_exports <- exports_data %>% 
-   group_by(year, component) %>%
+ exports <- kigali_data %>% 
+   group_by(year, flow, component) %>%
    summarize(exports = new + recovered) %>%
    ungroup()
  
- refrigeration_prod <- prod_data %>% 
-   group_by(year, component) %>%
+ production <- kigali_data %>% 
+   group_by(year, flow, component) %>%
    summarize(prod = produced - feedstock_produced - destroyed) %>%
    ungroup()
  
  # Join all refrigeration data
- refrigeration <- list(
-   refrigeration_imports,
-   refrigeration_exports,
-   refrigeration_prod) %>%
-   reduce(full_join, by = c("year", "component")) %>%
+  emissions <- list(
+   imports,
+   exports,
+   production) %>%
+   reduce(full_join, by = c("year", "flow", "component")) %>%
    left_join(hfc_defaults, by = c("component" = "hfc")) 
  
  
  # Run the full processing
- hfc_data_complete <- process_all_components(refrigeration, uncertainty)
+ hfc_emissions_complete <- process_all_components(emissions, uncertainty)
  
  # View result
- hfc_data_complete %>%
-   select(year, component, total_emissions, total_emissions_lower, total_emissions_upper)
+ hfc_emissions_complete %>%
+   select(year, flow, component, total_emissions, total_emissions_lower, total_emissions_upper)
  
  
