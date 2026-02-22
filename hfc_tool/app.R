@@ -7,9 +7,285 @@ library(viridis)
 library(DT)
 library(rhandsontable)
 
+# App Setup-----------------------------------------------------
+## Get Default Data----------------------------------------
+
+# Read data from pins board
+hfc_board <- board_folder("../data/pins")
+# We should have a master list of HFCs....fix this later
+edgar <- pin_read(hfc_board, "edgar")
+velders <- pin_read(hfc_board, "velders")
+uncertainty <- pin_read(hfc_board, "uncertainty")
+mixture_compositions <- pin_read(hfc_board, "mixture_compositions")
+applications <- pin_read(hfc_board, "applications")
+hfc_defaults <- pin_read(hfc_board, "hfc_defaults")
+
+## Functions: Kigali Data Emissions---------------------
+
+# Initial values
+init_bank_start <- 0
+init_bank_end <- 0
+init_bank_contained_history <- rep(0, 10)
+
+# This function computes proportional HFC consumption by application based on
+# assumptions derived from Velders et al. 
+get_abs_hfc_consumption <- function(scoping_data, velders) {
+  abs_hfc_consumption <- scoping_data %>%
+    mutate(velders_application = case_when(
+      sub_application == "domestic refrigeration" ~ "domestic refrigeration", 
+      sub_application %in% c("commercial refrigeration",
+                             "industrial refrigeration", 
+                             "transport refrigeration") ~ "commercial and industrial refrigeration",
+      sub_application == "mobile air conditioning" ~ "mobile air conditioning",
+      sub_application == "stationary air conditioning" ~ "stationary air conditioning",
+      sub_application == "aerosols" ~ "aerosols",
+      sub_application == "closed cell foam" ~ "closed cell foam",
+      sub_application == "open cell foam" ~ "open cell foam",
+      sub_application %in% c("solvents", "f-gas as solvent") ~ "solvents",
+      sub_application %in% c("semiconductor/electronics manufacture", 
+                             "production of halocarbons and sf6", 
+                             "electrical equipment", 
+                             "production of metals") ~ "manufacturing and production",
+      sub_application == "fire extinguishers" ~ "fire extinguishers",
+      sub_application %in% c("other f-gas use", "other ods") ~ "other")
+    ) %>%
+    left_join(velders, by = "velders_application") %>%
+    mutate(meta_application = case_when(
+      str_detect(velders_application, "refrigeration|conditioning") ~ "refrigeration and air conditioning",
+      str_detect(velders_application, "foam") ~ "foam",
+      velders_application == "fire extinguishers" ~ "fire protection",
+      .default = velders_application)) %>%
+    group_by(year, meta_application, velders_application) %>%
+    # Replace default emission factor NA values with 1 
+    replace_na(list(emission_factor_dev_countries = 1)) %>%
+    summarize(consumption_by_sector = sum(mmt_co2_eq / 
+                                            emission_factor_dev_countries, 
+                                          na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(consumption_total = sum(consumption_by_sector, 
+                                   na.rm = TRUE), .by = year) %>%
+    group_by(year, meta_application) %>%
+    summarize(consumption_share = sum(consumption_by_sector) / 
+                sum(consumption_total)) %>%
+    ungroup()
+  
+  return(abs_hfc_consumption)
+}
+
+# Helper function to calculate one year's values
+# Now with a 'scenario' parameter: "point", "lower", or "upper"
+calc_year <- function(prev_state, i, data, uncertainties, scenario = "point") {
+  # Extract current year's input values
+  ef_use <- data$emission_factor_installed_base[i]
+  imports <- data$imports[i]
+  prod <- data$prod[i]
+  exports <- data$exports[i]
+  destruction_rate <- data$destruction_at_end_of_life[i]
+  
+  # Extract uncertainties
+  u_kigali <- uncertainties$u_kigali[i]
+  u_ef_use <- uncertainties$u_ef_installed_base[i]
+  u_destruction <- uncertainties$u_destruction[i]
+  
+  # Apply uncertainty adjustments based on scenario
+  if (scenario == "lower") {
+    imports <- imports * (1 - u_kigali)
+    prod <- prod * (1 - u_kigali)
+    exports <- exports * (1 + u_kigali)  # Lower consumption = higher exports
+    ef_use <- ef_use * (1 - u_ef_use)
+    destruction_rate <- destruction_rate * (1 - u_destruction)
+  } else if (scenario == "upper") {
+    imports <- imports * (1 + u_kigali)
+    prod <- prod * (1 + u_kigali)
+    exports <- exports * (1 - u_kigali)  # Higher consumption = lower exports
+    ef_use <- ef_use * (1 + u_ef_use)
+    destruction_rate <- destruction_rate * (1 + u_destruction)
+  }
+  # else scenario == "point", use values as-is
+  
+  # Constants
+  ef_filling <- 0
+  new_equip_imports <- 0
+  new_equip_exports <- 0
+  
+  # Start calculations using previous state
+  bank_start_of_year <- prev_state$bank_end_of_year
+  
+  domestic_sales <- imports + prod - exports
+  in_use_equip_emissions <- bank_start_of_year * ef_use
+  servicing <- pmax(domestic_sales, in_use_equip_emissions, na.rm = TRUE)
+  new_equip_filling <- domestic_sales - servicing
+  filling_emissions <- new_equip_filling * ef_filling
+  new_equip_contained <- new_equip_filling - filling_emissions
+  bank_contained <- new_equip_contained + new_equip_imports - new_equip_exports
+  
+  # Get retired equipment from 10 years ago
+  retired_equip <- prev_state$bank_contained_history[1]
+  
+  reclaimed <- retired_equip * destruction_rate
+  destroyed <- 0
+  exported_used_equip <- 0
+  end_of_life_emissions <- retired_equip - reclaimed - destroyed - exported_used_equip
+  
+  bank_end_of_year <- bank_start_of_year + bank_contained + servicing - 
+    in_use_equip_emissions - retired_equip
+  
+  total_emissions <- filling_emissions + in_use_equip_emissions + end_of_life_emissions
+  
+  # Update bank_contained history
+  new_history <- c(prev_state$bank_contained_history[-1], bank_contained)
+  
+  # Return state for next iteration
+  list(
+    bank_end_of_year = bank_end_of_year,
+    bank_contained_history = new_history,
+    # Store all results
+    bank_start_of_year = bank_start_of_year,
+    domestic_sales = domestic_sales,
+    in_use_equip_emissions = in_use_equip_emissions,
+    servicing = servicing,
+    new_equip_filling = new_equip_filling,
+    filling_emissions = filling_emissions,
+    new_equip_contained = new_equip_contained,
+    bank_contained = bank_contained,
+    retired_equip = retired_equip,
+    reclaimed = reclaimed,
+    end_of_life_emissions = end_of_life_emissions,
+    bank_end_of_year = bank_end_of_year,
+    total_emissions = total_emissions
+  )
+}
+
+# Function to process one component with one scenario
+process_component <- function(component_data, uncertainties, scenario = "point") {
+  # Set up initial state
+  initial_state <- list(
+    bank_end_of_year = init_bank_end,
+    bank_contained_history = init_bank_contained_history
+  )
+  
+  # Use accumulate to calculate all years
+  all_calcs <- purrr::accumulate(
+    1:nrow(component_data),
+    function(prev_state, i) {
+      calc_year(prev_state, i, component_data, uncertainties, scenario)
+    },
+    .init = initial_state
+  )[-1]
+  
+  # Extract results into dataframe
+  calculated_df <- purrr::map_dfr(all_calcs, function(state) {
+    tibble(
+      bank_start_of_year = state$bank_start_of_year,
+      domestic_sales = state$domestic_sales,
+      in_use_equip_emissions = state$in_use_equip_emissions,
+      servicing = state$servicing,
+      new_equip_filling = state$new_equip_filling,
+      filling_emissions = state$filling_emissions,
+      new_equip_contained = state$new_equip_contained,
+      bank_contained = state$bank_contained,
+      retired_equip = state$retired_equip,
+      reclaimed = state$reclaimed,
+      end_of_life_emissions = state$end_of_life_emissions,
+      bank_end_of_year = state$bank_end_of_year,
+      total_emissions = state$total_emissions
+    )
+  })
+  
+  # Combine with original data
+  bind_cols(component_data, calculated_df)
+}
+
+# Main processing function
+process_all_components <- function(kigali_data, uncertainty_data) {
+  # Prepare uncertainty data
+  uncertainties <- kigali_data %>%
+    left_join(
+      uncertainty_data %>%
+        filter(parameter == "kigali data") %>%
+        select(hfc, u_kigali = uncertainty) %>%
+        mutate(hfc = str_remove_all(hfc, "-")),
+      by = c("component" = "hfc")
+    ) %>%
+    left_join(
+      uncertainty_data %>%
+        filter(parameter == "emission factor installed base") %>%
+        select(hfc, u_ef_installed_base = uncertainty) %>%
+        mutate(hfc = str_remove_all(hfc, "-")),
+      by = c("component" = "hfc")
+    ) %>%
+    left_join(
+      uncertainty_data %>%
+        filter(parameter == "% destroyed") %>%
+        select(hfc, u_destruction = uncertainty) %>%
+        mutate(hfc = str_remove_all(hfc, "-")),
+      by = c("component" = "hfc")
+    ) %>%
+    # Replace NAs with 0 (no uncertainty)
+    mutate(
+      u_kigali = replace_na(u_kigali, 0),
+      u_ef_installed_base = replace_na(u_ef_installed_base, 0),
+      u_destruction = replace_na(u_destruction, 0)
+    )
+  
+  # Split by component
+  component_list <- kigali_data %>%
+    arrange(component, year) %>%
+    group_by(component) %>%
+    group_split()
+  
+  # Get corresponding uncertainty chunks
+  uncertainty_list <- uncertainties %>%
+    arrange(component, year) %>%
+    group_by(component) %>%
+    group_split()
+  
+  # Process each scenario
+  point_estimates <- map2_dfr(
+    component_list, 
+    uncertainty_list,
+    ~process_component(.x, .y, scenario = "point")
+  )
+  
+  lower_estimates <- map2_dfr(
+    component_list, 
+    uncertainty_list,
+    ~process_component(.x, .y, scenario = "lower")
+  )
+  
+  upper_estimates <- map2_dfr(
+    component_list, 
+    uncertainty_list,
+    ~process_component(.x, .y, scenario = "upper")
+  )
+  
+  # Combine into single dataframe with uncertainty bounds
+  point_estimates %>%
+    mutate(
+      total_emissions_lower = lower_estimates$total_emissions,
+      total_emissions_upper = upper_estimates$total_emissions,
+      in_use_emissions_lower = lower_estimates$in_use_equip_emissions,
+      in_use_emissions_upper = upper_estimates$in_use_equip_emissions,
+      eol_emissions_lower = lower_estimates$end_of_life_emissions,
+      eol_emissions_upper = upper_estimates$end_of_life_emissions
+    ) %>%
+    mutate(
+      ef_filling = 0,
+      ef_use = emission_factor_installed_base,
+      new_equip_imports = 0,
+      new_equip_exports = 0,
+      destroyed = 0,
+      exported_used_equip = 0
+    )
+}
+
+
+## App Interface Setup--------------------------------
+
 # Convert year to numeric
 edgar <- edgar %>%
-  mutate(year = as.numeric(as.character(year)))
+  mutate(year = as.numeric(as.character(year))) 
+
 
 # Category choices by flow type
 category_choices <- list(
@@ -176,7 +452,8 @@ server <- function(input, output, session) {
     stringsAsFactors = FALSE
   )
   
-  # ── Scoping data ──────────────────────────────────────────────────────────
+  ## Scoping data------------
+  
   scoping_data <- reactive({
     req(input$country)
     edgar %>%
@@ -260,7 +537,7 @@ server <- function(input, output, session) {
              withD3  = TRUE)
   })
   
-  # ── Kigali data entry ─────────────────────────────────────────────────────
+  ## Kigali data entry -------
   output$kigali_input_table <- renderRHandsontable({
     df <- if (!is.null(input$kigali_input_table)) {
       hot_to_r(input$kigali_input_table)
@@ -312,21 +589,76 @@ server <- function(input, output, session) {
     scrollX    = TRUE
   ),
   rownames = FALSE)
+  
 
-  # ── Emissions ─────────────────────────────────────────────────────────────
+  ## Emissions ---------
+  
+  emissions_data <- eventReactive(input$calculate_emissions, {
+    req(kigali_data(), scoping_data())
+    
+    kd <- kigali_data()
+    
+    # Pivot to wide format
+    imports_df <- kd %>%
+      filter(flow == "imports") %>%
+      group_by(year, component) %>%
+      summarize(imports = sum(quantity, na.rm = TRUE), .groups = "drop")
+    
+    exports_df <- kd %>%
+      filter(flow == "exports") %>%
+      group_by(year, component) %>%
+      summarize(exports = sum(quantity, na.rm = TRUE), .groups = "drop")
+    
+    prod_df <- kd %>%
+      filter(flow == "production") %>%
+      group_by(year, component) %>%
+      summarize(prod = sum(quantity, na.rm = TRUE), .groups = "drop")
+    
+    emissions_input <- imports_df %>%
+      full_join(exports_df, by = c("year", "component")) %>%
+      full_join(prod_df,    by = c("year", "component")) %>%
+      replace_na(list(imports = 0, exports = 0, prod = 0)) %>%
+      left_join(
+        hfc_defaults %>% rename(component = hfc),
+        by = "component"
+      ) %>%
+      arrange(component, year)
+    
+    # Run emissions model - results are in kg of each HFC
+    hfc_emissions <- process_all_components(emissions_input, uncertainty)
+    
+    # Get application shares from Velders/EDGAR scoping data
+    app_shares <- get_abs_hfc_consumption(scoping_data(), velders)
+    
+    # Get the years present in both datasets for the join
+    # app_shares may not cover all Kigali years - use closest available year
+    available_years <- unique(app_shares$year)
+    
+    hfc_emissions %>%
+      mutate(share_year = available_years[which.min(abs(available_years - year))][1],
+             .by = year) %>%
+      left_join(app_shares, by = c("share_year" = "year")) %>%
+      mutate(
+        emissions_by_app        = total_emissions        * consumption_share,
+        emissions_by_app_lower  = total_emissions_lower  * consumption_share,
+        emissions_by_app_upper  = total_emissions_upper  * consumption_share
+      ) %>%
+      select(-share_year)
+  })
+  
   output$emissions_table <- renderDT({
-    req(input$calculate_emissions)
+    req(emissions_data())
     datatable(
-      hfc_data_complete %>%
-        select(year, component, total_emissions, 
-               total_emissions_lower, total_emissions_upper),
-      options   = list(dom = "Bfrtip", buttons = c("copy", "csv", "excel"),
-                       pageLength = 25, scrollX = TRUE),
+      emissions_data() %>%
+        select(year, component, meta_application, consumption_share,
+               emissions_by_app, emissions_by_app_lower, emissions_by_app_upper) %>%
+        mutate(across(where(is.numeric), ~round(.x, 4))),
+      options    = list(dom = "Bfrtip", buttons = c("copy", "csv", "excel"),
+                        pageLength = 25, scrollX = TRUE),
       extensions = "Buttons",
-      rownames  = FALSE
+      rownames   = FALSE
     )
   })
 }
-
-# Run the app
+## Run the app-------
 shinyApp(ui = ui, server = server)
