@@ -11,7 +11,7 @@ library(rhandsontable)
 ## Get Default Data----------------------------------------
 
 # Read data from pins board
-hfc_board <- board_folder("../data/pins")
+hfc_board <- board_folder("data/pins")
 # We should have a master list of HFCs....fix this later
 edgar <- pin_read(hfc_board, "edgar")
 velders <- pin_read(hfc_board, "velders")
@@ -197,7 +197,8 @@ process_component <- function(component_data, uncertainties, scenario = "point")
 }
 
 # Main processing function
-process_all_components <- function(kigali_data, uncertainty_data) {
+process_all_components <- function(kigali_data, uncertainty_data, 
+                                   group_vars = c("component", "meta_application")) {
   # Prepare uncertainty data
   uncertainties <- kigali_data %>%
     left_join(
@@ -221,60 +222,46 @@ process_all_components <- function(kigali_data, uncertainty_data) {
         mutate(hfc = str_remove_all(hfc, "-")),
       by = c("component" = "hfc")
     ) %>%
-    # Replace NAs with 0 (no uncertainty)
     mutate(
-      u_kigali = replace_na(u_kigali, 0),
+      u_kigali            = replace_na(u_kigali, 0),
       u_ef_installed_base = replace_na(u_ef_installed_base, 0),
-      u_destruction = replace_na(u_destruction, 0)
+      u_destruction       = replace_na(u_destruction, 0)
     )
   
-  # Split by component
+  # Split by group_vars (e.g. component x application)
   component_list <- kigali_data %>%
-    arrange(component, year) %>%
-    group_by(component) %>%
+    arrange(across(all_of(group_vars)), year) %>%
+    group_by(across(all_of(group_vars))) %>%
     group_split()
   
-  # Get corresponding uncertainty chunks
   uncertainty_list <- uncertainties %>%
-    arrange(component, year) %>%
-    group_by(component) %>%
+    arrange(across(all_of(group_vars)), year) %>%
+    group_by(across(all_of(group_vars))) %>%
     group_split()
   
   # Process each scenario
-  point_estimates <- map2_dfr(
-    component_list, 
-    uncertainty_list,
-    ~process_component(.x, .y, scenario = "point")
-  )
+  point_estimates <- map2_dfr(component_list, uncertainty_list,
+                               ~process_component(.x, .y, scenario = "point"))
+  lower_estimates <- map2_dfr(component_list, uncertainty_list,
+                               ~process_component(.x, .y, scenario = "lower"))
+  upper_estimates <- map2_dfr(component_list, uncertainty_list,
+                               ~process_component(.x, .y, scenario = "upper"))
   
-  lower_estimates <- map2_dfr(
-    component_list, 
-    uncertainty_list,
-    ~process_component(.x, .y, scenario = "lower")
-  )
-  
-  upper_estimates <- map2_dfr(
-    component_list, 
-    uncertainty_list,
-    ~process_component(.x, .y, scenario = "upper")
-  )
-  
-  # Combine into single dataframe with uncertainty bounds
   point_estimates %>%
     mutate(
-      total_emissions_lower = lower_estimates$total_emissions,
-      total_emissions_upper = upper_estimates$total_emissions,
+      total_emissions_lower  = lower_estimates$total_emissions,
+      total_emissions_upper  = upper_estimates$total_emissions,
       in_use_emissions_lower = lower_estimates$in_use_equip_emissions,
       in_use_emissions_upper = upper_estimates$in_use_equip_emissions,
-      eol_emissions_lower = lower_estimates$end_of_life_emissions,
-      eol_emissions_upper = upper_estimates$end_of_life_emissions
+      eol_emissions_lower    = lower_estimates$end_of_life_emissions,
+      eol_emissions_upper    = upper_estimates$end_of_life_emissions
     ) %>%
     mutate(
-      ef_filling = 0,
-      ef_use = emission_factor_installed_base,
-      new_equip_imports = 0,
-      new_equip_exports = 0,
-      destroyed = 0,
+      ef_filling         = 0,
+      ef_use             = emission_factor_installed_base,
+      new_equip_imports  = 0,
+      new_equip_exports  = 0,
+      destroyed          = 0,
       exported_used_equip = 0
     )
 }
@@ -296,7 +283,7 @@ category_choices <- list(
 
 # Function to calculate HFC totals from user input
 calculate_hfc_totals <- function(user_input, flow_col = "flow") {
-  # We'll group by year, component, flow, category, application
+  # Group by year, component, flow, category (no application - partitioning happens later)
   user_input %>%
     mutate(type = ifelse(hfc %in% mixture_compositions$mixture, "mixture", "component")) %>%
     { bind_rows(
@@ -304,14 +291,14 @@ calculate_hfc_totals <- function(user_input, flow_col = "flow") {
       filter(., type == "mixture") %>%
         left_join(mixture_compositions, by = c("hfc" = "mixture")) %>%
         mutate(quantity = fraction * quantity) %>%
-        select(year, component, quantity, flow, category, application),
+        select(year, component, quantity, flow, category),
       # Keep pure components
       filter(., type == "component") %>%
         rename(component = hfc) %>%
-        select(year, component, quantity, flow, category, application)
+        select(year, component, quantity, flow, category)
     )
     } %>%
-    group_by(year, component, flow, category, application) %>%
+    group_by(year, component, flow, category) %>%
     summarize(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
     arrange(year, flow, component)
 }
@@ -329,9 +316,9 @@ ui <- fluidPage(
       'production': ['produced', 'feedstock_produced', 'destroyed']
     };
 
-    // Column indices (0-based): flow=3, category=4
-    var FLOW_COL = 3;
-    var CAT_COL  = 4;
+    // Column indices (0-based): flow=2, category=3
+    var FLOW_COL = 2;
+    var CAT_COL  = 3;
 
     function updateCategoryDropdown(hot, row) {
       var flowVal = hot.getDataAtCell(row, FLOW_COL);
@@ -443,12 +430,11 @@ server <- function(input, output, session) {
   
   # Initial empty dataframe for Kigali input
   initial_kigali <- data.frame(
-    year        = rep(2020L, 5),
-    hfc         = rep("", 5),
-    application = rep("Refrigeration and Air Conditioning", 5),
-    flow        = rep("imports", 5),
-    category    = rep("new", 5),
-    quantity    = rep(0, 5),
+    year     = rep(2020L, 5),
+    hfc      = rep("", 5),
+    flow     = rep("imports", 5),
+    category = rep("new", 5),
+    quantity = rep(0, 5),
     stringsAsFactors = FALSE
   )
   
@@ -547,19 +533,17 @@ server <- function(input, output, session) {
     df$year <- as.integer(df$year)
     
     rhandsontable(df, rowHeaders = NULL) %>%
-      hot_col("year",        type = "numeric",  format = "0", colWidths = 65) %>%
-      hot_col("hfc",         type = "dropdown",  colWidths = 220,
+      hot_col("year",     type = "numeric",  format = "0", colWidths = 65) %>%
+      hot_col("hfc",      type = "dropdown", colWidths = 220,
               source = c("", unique(c(mixture_compositions$component,
                                       mixture_compositions$mixture)))) %>%
-      hot_col("application", type = "dropdown",  colWidths = 240,
-              source = c("Refrigeration and Air Conditioning")) %>%
-      hot_col("flow",        type = "dropdown",  colWidths = 110,
+      hot_col("flow",     type = "dropdown", colWidths = 110,
               source = c("imports", "exports", "production")) %>%
-      hot_col("category",    type = "dropdown",  colWidths = 160,
+      hot_col("category", type = "dropdown", colWidths = 160,
               # Full list here; JS narrows it live based on flow selection
               source = c("new", "recovered", "feedstock",
                          "produced", "feedstock_produced", "destroyed")) %>%
-      hot_col("quantity",    type = "numeric",   colWidths = 90) %>%
+      hot_col("quantity", type = "numeric",  colWidths = 90) %>%
       hot_table(highlightRow = TRUE, highlightCol = TRUE)
   })
   
@@ -571,7 +555,7 @@ server <- function(input, output, session) {
     if (nrow(df) == 0) {
       return(data.frame(year = integer(), component = character(),
                         flow = character(), category = character(),
-                        application = character(), quantity = numeric()))
+                        quantity = numeric()))
     }
     
     calculate_hfc_totals(df)
@@ -598,7 +582,7 @@ server <- function(input, output, session) {
     
     kd <- kigali_data()
     
-    # Pivot to wide format
+    # Pivot to wide format (year x component)
     imports_df <- kd %>%
       filter(flow == "imports") %>%
       group_by(year, component) %>%
@@ -614,36 +598,42 @@ server <- function(input, output, session) {
       group_by(year, component) %>%
       summarize(prod = sum(quantity, na.rm = TRUE), .groups = "drop")
     
-    emissions_input <- imports_df %>%
+    consumption_wide <- imports_df %>%
       full_join(exports_df, by = c("year", "component")) %>%
       full_join(prod_df,    by = c("year", "component")) %>%
-      replace_na(list(imports = 0, exports = 0, prod = 0)) %>%
+      replace_na(list(imports = 0, exports = 0, prod = 0))
+    
+    # --- Step 1: Partition by application BEFORE any calculations ---
+    # Get application shares from Velders/EDGAR scoping data.
+    # NOTE: shares are currently identical across HFCs (same proportions applied
+    # to every component). Revisit if HFC-specific Velders data becomes available.
+    app_shares <- get_abs_hfc_consumption(scoping_data(), velders)
+    available_years <- unique(app_shares$year)
+    
+    # Cross-join consumption with application shares (matched to nearest EDGAR year)
+    emissions_input <- consumption_wide %>%
+      mutate(share_year = available_years[which.min(abs(available_years - year))][1],
+             .by = year) %>%
+      left_join(app_shares, by = c("share_year" = "year")) %>%
+      # Apply shares to split each flow by application
+      mutate(
+        imports = imports * consumption_share,
+        exports = exports * consumption_share,
+        prod    = prod    * consumption_share
+      ) %>%
+      select(-share_year) %>%
+      # --- Step 2: Join application-specific defaults ---
+      # Currently defaults are uniform across applications; join will be on hfc only.
+      # When application-specific parameters are available, add application to the join key.
       left_join(
         hfc_defaults %>% rename(component = hfc),
         by = "component"
       ) %>%
-      arrange(component, year)
+      arrange(meta_application, component, year)
     
-    # Run emissions model - results are in kg of each HFC
-    hfc_emissions <- process_all_components(emissions_input, uncertainty)
-    
-    # Get application shares from Velders/EDGAR scoping data
-    app_shares <- get_abs_hfc_consumption(scoping_data(), velders)
-    
-    # Get the years present in both datasets for the join
-    # app_shares may not cover all Kigali years - use closest available year
-    available_years <- unique(app_shares$year)
-    
-    hfc_emissions %>%
-      mutate(share_year = available_years[which.min(abs(available_years - year))][1],
-             .by = year) %>%
-      left_join(app_shares, by = c("share_year" = "year")) %>%
-      mutate(
-        emissions_by_app        = total_emissions        * consumption_share,
-        emissions_by_app_lower  = total_emissions_lower  * consumption_share,
-        emissions_by_app_upper  = total_emissions_upper  * consumption_share
-      ) %>%
-      select(-share_year)
+    # --- Step 3: Run emissions model for each (component x application) slice ---
+    process_all_components(emissions_input, uncertainty, 
+                           group_vars = c("component", "meta_application"))
   })
   
   output$emissions_table <- renderDT({
@@ -651,7 +641,7 @@ server <- function(input, output, session) {
     datatable(
       emissions_data() %>%
         select(year, component, meta_application, consumption_share,
-               emissions_by_app, emissions_by_app_lower, emissions_by_app_upper) %>%
+               total_emissions, total_emissions_lower, total_emissions_upper) %>%
         mutate(across(where(is.numeric), ~round(.x, 4))),
       options    = list(dom = "Bfrtip", buttons = c("copy", "csv", "excel"),
                         pageLength = 25, scrollX = TRUE),
