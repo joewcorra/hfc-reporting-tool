@@ -1,0 +1,88 @@
+---
+title: "roadmap"
+format: 
+  html:
+    theme: united
+    toc: true
+    number-sections: true
+    embed-resources: true
+---
+
+# HFC Emissions Tool — Roadmap
+
+**Last updated:** 2026-02-28
+
+------------------------------------------------------------------------
+
+## Current State
+
+The core application is functional end-to-end:
+
+-   **Scoping tab:** Pulls EDGAR emissions data for a selected country; visualizes historical emissions by application and sub-application (time series, treemap, sunburst)
+-   **Kigali Data tab:** Interactive rhandsontable for entering imports, exports, and production by HFC (pure components and mixtures); decomposes mixtures into components; calculates net consumption totals
+-   **Emissions tab:** Applies Velders et al. (2015) proportions to partition consumption by application *before* running IPCC bank model calculations; produces point estimates with upper/lower uncertainty bounds for each `(year, component, application)` combination
+
+<!-- Architecture decisions are documented in `/docs/adr/`. -->
+
+------------------------------------------------------------------------
+
+## Deferred: Methodological
+
+### M1 — HFC-specific Velders allocation proportions
+
+**Current:** The same application shares (derived from EDGAR/Velders) are applied uniformly to every HFC component.\
+**Issue:** In reality, different HFCs are concentrated in different applications (e.g. HFC-134a → MAC; HFC-245fa → foam). Uniform shares introduce systematic bias.\
+**Path forward:** Source or derive HFC-specific allocation proportions from Velders or equivalent literature; expand the `velders` pin to include a `component` key and update the join in `emissions_data`.
+
+### M2 — Application-specific default parameters
+
+**Current:** `hfc_defaults` has one row per HFC; equipment lifetime, leak rates, and destruction rates are identical across applications.\
+**Issue:** These parameters vary substantially by application and are a primary driver of emissions estimate accuracy.\
+**Path forward:** Expand `hfc_defaults` to `(hfc, application)` rows with application-appropriate values. The pipeline already handles this — only the defaults table and its join key need updating (add `meta_application` to join).
+
+### M3 — Leak rate during equipment filling (`ef_filling`)
+
+**Current:** Hardcoded to 0.\
+**Issue:** There is some emission during the filling/manufacturing process. The appropriate default factor needs to be researched from IPCC guidance or primary literature.\
+**Path forward:** Research default value(s); determine whether this varies by application; incorporate into `hfc_defaults` and surface as an editable parameter.
+
+------------------------------------------------------------------------
+
+## Deferred: User Experience & Data Entry
+
+### UX1 — Understand compiler workflows and data availability
+
+We don't yet have a clear picture of how real compilers will interact with the tool. Key open questions:
+
+-   What data do compilers typically have, and in what form? Is Kigali consumption data usually in a spreadsheet, a database export, or entered manually year by year?
+-   Will some compilers have their own estimates for parameters like leak rates or equipment lifetime that should override our defaults? If so, we need a mechanism for them to supply those.
+-   How large are typical time series? If compilers are entering 20–30 years of data across multiple HFCs, the current rhandsontable may be impractical.
+
+**Recommended next step:** Interview or survey a small number of target compilers before investing further in the data entry UI.
+
+### UX2 — File upload as an alternative to manual data entry
+
+If compiler time series are large (likely), a file upload pathway (Excel or CSV) is probably preferable to manual row-by-row entry. This would require:
+
+-   A defined input file template/schema for compilers to populate
+-   A data ingestion and validation subsystem to parse, clean, and flag issues in uploaded files
+-   The rhandsontable could remain as a fallback for small datasets or manual corrections
+
+The ingestion/cleaning step is a strong candidate for an LLM-assisted approach — parsing messy real-world spreadsheets, inferring column mappings, and flagging ambiguous entries are tasks where an LLM can add significant value over rigid rule-based parsing.
+
+### UX3 — User-supplied parameter overrides
+
+Related to UX1: if compilers have their own application- or HFC-specific data (e.g. a national survey of equipment lifetimes), the tool should allow them to override default parameters. Design options range from an editable parameters table in the UI to a separate upload mechanism for a parameters file. Scope depends on UX1 findings.
+
+------------------------------------------------------------------------
+
+## Suggested Prioritization
+
+| Priority | Item | Dependency |
+|-------------------------|------------------|------------------------------|
+| High | M3 — Research `ef_filling` default | None |
+| High | UX1 — Compiler workflow research | None |
+| Medium | M2 — Application-specific defaults | UX1 (confirm compilers won't supply own data first) |
+| Medium | UX2 — File upload pathway | UX1 |
+| Medium | UX3 — Parameter overrides | UX1, M2 |
+| Lower | M1 — HFC-specific Velders shares | Literature search required |
