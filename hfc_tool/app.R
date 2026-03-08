@@ -6,7 +6,6 @@ library(treemapify)
 library(sunburstR)
 library(viridis)
 library(DT)
-library(rhandsontable)
 
 # App Setup-----------------------------------------------------
 ## Get Default Data----------------------------------------
@@ -444,46 +443,6 @@ ui <- page_navbar(
     "))
   ),
   
-  # ── JavaScript for contingent category dropdowns ───────────────────────────
-  tags$head(tags$script(HTML("
-    var categoryMap = {
-      'imports':    ['new', 'recovered', 'feedstock'],
-      'exports':    ['new', 'recovered'],
-      'production': ['produced', 'feedstock_produced', 'destroyed']
-    };
-    var FLOW_COL = 2;
-    var CAT_COL  = 3;
-
-    function updateCategoryDropdown(hot, row) {
-      var flowVal = hot.getDataAtCell(row, FLOW_COL);
-      var allowed = categoryMap[flowVal] || [];
-      var curCat  = hot.getDataAtCell(row, CAT_COL);
-      if (allowed.length > 0 && !allowed.includes(curCat)) {
-        hot.setDataAtCell(row, CAT_COL, allowed[0]);
-      }
-      hot.setCellMeta(row, CAT_COL, 'source', allowed);
-      hot.render();
-    }
-
-    $(document).on('shiny:value', function(e) {
-      if (e.name !== 'kigali_input_table') return;
-      setTimeout(function() {
-        var container  = document.getElementById('kigali_input_table');
-        if (!container) return;
-        var hot = container.querySelector('.handsontable');
-        if (!hot || !hot.hotInstance) return;
-        var htInstance = hot.hotInstance;
-        var nrows = htInstance.countRows();
-        for (var r = 0; r < nrows; r++) { updateCategoryDropdown(htInstance, r); }
-        htInstance.addHook('afterChange', function(changes, source) {
-          if (!changes) return;
-          changes.forEach(function(change) {
-            if (change[1] === FLOW_COL) updateCategoryDropdown(htInstance, change[0]);
-          });
-        });
-      }, 300);
-    });
-  "))),
   
   # ── Country selector (persistent, in navbar) ───────────────────────────────
   nav_spacer(),
@@ -572,17 +531,43 @@ ui <- page_navbar(
     icon = icon("file-import"),
     
     card(
-      card_header("Kigali Reporting Data Entry"),
+      card_header("Upload Kigali Reporting Data"),
       card_body(
         p(class = "text-muted", style = "font-size: 0.85rem; margin-bottom: 0.75rem;",
-          "Enter all production, import, and export data below.",
-          "Right-click for options to add or remove rows.",
-          "Category options update automatically based on the selected Flow."),
-        rHandsontableOutput("kigali_input_table"),
-        br(),
-        actionButton("calc_kigali", "Calculate Totals", class = "btn-primary")
+          "Upload a CSV file containing your Kigali reporting data.",
+          "Required columns: ", tags$code("year"), ", ", tags$code("hfc"), ", ",
+          tags$code("flow"), ", ", tags$code("category"), ", ", tags$code("quantity"),
+          ". Columns may be in any order."),
+        
+        layout_columns(
+          col_widths = c(4, 8),
+          
+          # Upload control
+          div(
+            fileInput(
+              "kigali_csv",
+              label    = "Choose CSV file",
+              accept   = ".csv",
+              width    = "100%",
+              buttonLabel = tagList(icon("upload"), " Browse"),
+              placeholder = "No file selected"
+            ),
+            actionButton("calc_kigali", "Calculate Totals",
+                         class = "btn-primary",
+                         icon  = icon("calculator"))
+          ),
+          
+          # Validation feedback
+          div(
+            style = "padding-top: 1.85rem;",  # aligns with input top
+            uiOutput("kigali_upload_status")
+          )
+        )
       )
     ),
+    
+    # Data preview — visible after successful upload
+    uiOutput("kigali_preview_card"),
     
     card(
       card_header("Calculated Totals"),
@@ -703,34 +688,105 @@ server <- function(input, output, session) {
              withD3  = TRUE)
   })
   
-  ## Kigali data entry -------
-  output$kigali_input_table <- renderRHandsontable({
-    df <- if (!is.null(input$kigali_input_table)) {
-      hot_to_r(input$kigali_input_table)
-    } else {
-      initial_kigali
-    }
-    df$year <- as.integer(df$year)
+  ## Kigali CSV upload -------
+  
+  KIGALI_REQUIRED_COLS <- c("year", "hfc", "flow", "category", "quantity")
+  
+  # Reactive: parsed & validated CSV
+  kigali_upload <- reactive({
+    req(input$kigali_csv)
     
-    rhandsontable(df, rowHeaders = NULL) %>%
-      hot_col("year",     type = "numeric",  format = "0", colWidths = 65) %>%
-      hot_col("hfc",      type = "dropdown", colWidths = 220,
-              source = c("", unique(c(mixture_compositions$component,
-                                      mixture_compositions$mixture)))) %>%
-      hot_col("flow",     type = "dropdown", colWidths = 110,
-              source = c("imports", "exports", "production")) %>%
-      hot_col("category", type = "dropdown", colWidths = 160,
-              # Full list here; JS narrows it live based on flow selection
-              source = c("new", "recovered", "feedstock",
-                         "produced", "feedstock_produced", "destroyed")) %>%
-      hot_col("quantity", type = "numeric",  colWidths = 90) %>%
-      hot_table(highlightRow = TRUE, highlightCol = TRUE)
+    tryCatch({
+      df <- read.csv(input$kigali_csv$datapath, stringsAsFactors = FALSE)
+      
+      # Normalise column names (lowercase, strip whitespace)
+      names(df) <- tolower(trimws(names(df)))
+      
+      missing_cols <- setdiff(KIGALI_REQUIRED_COLS, names(df))
+      present_cols <- intersect(KIGALI_REQUIRED_COLS, names(df))
+      
+      list(
+        data         = df,
+        missing_cols = missing_cols,
+        present_cols = present_cols,
+        ok           = length(missing_cols) == 0
+      )
+    }, error = function(e) {
+      list(data = NULL, missing_cols = KIGALI_REQUIRED_COLS,
+           present_cols = character(0), ok = FALSE,
+           error_msg = conditionMessage(e))
+    })
   })
   
+  # Upload status message
+  output$kigali_upload_status <- renderUI({
+    req(input$kigali_csv)
+    res <- kigali_upload()
+    
+    if (!is.null(res$error_msg)) {
+      div(class = "alert alert-danger", style = "font-size: 0.85rem; margin-bottom: 0;",
+          icon("circle-xmark"), " ",
+          tags$strong("Could not read file: "), res$error_msg)
+      
+    } else if (res$ok) {
+      div(class = "alert alert-success", style = "font-size: 0.85rem; margin-bottom: 0;",
+          icon("circle-check"), " ",
+          tags$strong(nrow(res$data), " rows loaded successfully."),
+          " All required columns found.")
+      
+    } else {
+      div(class = "alert alert-warning", style = "font-size: 0.85rem; margin-bottom: 0;",
+          icon("triangle-exclamation"), " ",
+          tags$strong("Missing columns: "),
+          paste(res$missing_cols, collapse = ", "), ". ",
+          "Proceeding with available columns: ",
+          paste(res$present_cols, collapse = ", "), ".")
+    }
+  })
+  
+  # Preview card — only rendered after a file is uploaded
+  output$kigali_preview_card <- renderUI({
+    req(input$kigali_csv)
+    res <- kigali_upload()
+    req(!is.null(res$data))
+    
+    card(
+      card_header("Data Preview"),
+      card_body(
+        DTOutput("kigali_preview_table")
+      )
+    )
+  })
+  
+  output$kigali_preview_table <- renderDT({
+    req(kigali_upload()$data)
+    kigali_upload()$data
+  }, options = list(
+    pageLength = 10,
+    scrollX    = TRUE,
+    dom        = "frtip"   # no buttons on preview
+  ), rownames = FALSE)
+  
+  # Main reactive — replaces the old hot_to_r()-based one
   kigali_data <- eventReactive(input$calc_kigali, {
-    req(input$kigali_input_table)
-    df <- hot_to_r(input$kigali_input_table) %>%
-      filter(hfc != "", !is.na(quantity), quantity != 0)
+    res <- kigali_upload()
+    req(!is.null(res$data))
+    
+    df <- res$data
+    
+    # Coerce types defensively
+    if ("year"     %in% names(df)) df$year     <- as.integer(df$year)
+    if ("quantity" %in% names(df)) df$quantity <- as.numeric(df$quantity)
+    if ("hfc"      %in% names(df)) df$hfc      <- as.character(df$hfc)
+    if ("flow"     %in% names(df)) df$flow     <- as.character(df$flow)
+    if ("category" %in% names(df)) df$category <- as.character(df$category)
+    
+    # Filter to valid rows (mirrors old handsontable logic)
+    df <- df %>%
+      filter(
+        if ("hfc"      %in% names(.)) hfc != "" & !is.na(hfc) else TRUE,
+        if ("quantity" %in% names(.)) !is.na(quantity) & quantity != 0 else TRUE
+      )
     
     if (nrow(df) == 0) {
       return(data.frame(year = integer(), component = character(),
@@ -753,7 +809,6 @@ server <- function(input, output, session) {
     scrollX    = TRUE
   ),
   rownames = FALSE)
-  
 
   ## Emissions ---------
   
