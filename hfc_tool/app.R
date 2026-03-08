@@ -1,5 +1,6 @@
 library(shiny)
 library(pins)
+library(bslib)
 library(tidyverse)
 library(treemapify)
 library(sunburstR)
@@ -304,127 +305,306 @@ calculate_hfc_totals <- function(user_input, flow_col = "flow") {
 }
 
 # UI--------------------------------------
-ui <- fluidPage(
-  titlePanel("HFC Emissions Tool"),
+ui <- page_navbar(
+  title = div(
+    style = "display: flex; align-items: center; gap: 10px;",
+    span("HFC Emissions Tool", style = "font-weight: 600; letter-spacing: 0.02em;")
+  ),
   
-  # JavaScript to handle contingent category dropdowns
+  # ── Theme ──────────────────────────────────────────────────────────────────
+  theme = bs_theme(
+    version       = 5,
+    bg            = "#f8f9fa",
+    fg            = "#1a2332",
+    primary       = "#2d6a9f",
+    secondary     = "#6c757d",
+    base_font     = font_google("Source Sans 3"),
+    heading_font  = font_google("Source Sans 3"),
+    code_font     = font_google("JetBrains Mono"),
+    "navbar-bg"               = "#1a2332",
+    "navbar-light-color"      = "#e8edf2",
+    "navbar-light-hover-color"= "#ffffff",
+    "navbar-light-active-color"= "#ffffff",
+    "card-border-color"       = "#dee2e6",
+    "card-cap-bg"             = "#f1f4f7"
+  ),
+  
+  # ── Global CSS ─────────────────────────────────────────────────────────────
+  header = tags$head(
+    tags$style(HTML("
+      /* Navbar refinements */
+      .navbar { 
+        border-bottom: 3px solid #2d6a9f; 
+        padding-top: 0.6rem; 
+        padding-bottom: 0.6rem;
+      }
+      .navbar-brand { color: #ffffff !important; font-size: 1.1rem; }
+      .navbar .nav-link { 
+        color: #c8d4e0 !important; 
+        font-size: 0.9rem; 
+        padding: 0.5rem 1rem !important;
+        transition: color 0.15s;
+      }
+      .navbar .nav-link:hover,
+      .navbar .nav-link.active { color: #ffffff !important; }
+      .navbar .nav-link.active { 
+        border-bottom: 2px solid #5ba3d9; 
+        margin-bottom: -2px; 
+      }
+
+      /* Country selector in navbar */
+      #country { 
+        font-size: 0.85rem; 
+        padding: 0.25rem 0.5rem; 
+        border-radius: 4px;
+        min-width: 200px;
+        background-color: #263547;
+        border: 1px solid #3d5166;
+        color: #e8edf2;
+      }
+      .navbar .control-label { 
+        color: #a0b0c0; 
+        font-size: 0.78rem; 
+        margin-bottom: 2px;
+        display: block;
+      }
+      
+      /* Cards */
+      .card { 
+        box-shadow: 0 1px 4px rgba(0,0,0,0.07); 
+        border-radius: 6px;
+        margin-bottom: 1rem;
+      }
+      .card-header { 
+        font-weight: 600; 
+        font-size: 0.88rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #4a5568;
+        padding: 0.6rem 1rem;
+      }
+      
+      /* Accordion (instructions) */
+      .accordion-button { 
+        font-weight: 600; 
+        font-size: 0.9rem;
+        color: #2d6a9f;
+        background-color: #eef3f8;
+      }
+      .accordion-button:not(.collapsed) { 
+        background-color: #dde8f3; 
+        color: #1a4f7a;
+        box-shadow: none;
+      }
+      .accordion-body { 
+        font-size: 0.88rem; 
+        color: #4a5568; 
+        line-height: 1.6;
+        background-color: #f8fafc;
+      }
+      
+      /* DT tables */
+      .dataTables_wrapper { font-size: 0.83rem; }
+      table.dataTable thead th { 
+        background-color: #f1f4f7; 
+        color: #2d3748;
+        font-weight: 600;
+        border-bottom: 2px solid #cbd5e0;
+        white-space: nowrap;
+      }
+      table.dataTable tbody tr:hover { background-color: #eef3f8 !important; }
+      .dataTables_filter input { font-size: 0.82rem; }
+      .dataTables_length select { font-size: 0.82rem; }
+      
+      /* Action buttons */
+      .btn-primary { 
+        background-color: #2d6a9f; 
+        border-color: #2d6a9f;
+        font-size: 0.88rem;
+        padding: 0.4rem 1.1rem;
+        border-radius: 4px;
+        transition: background-color 0.15s;
+      }
+      .btn-primary:hover { background-color: #1a4f7a; border-color: #1a4f7a; }
+      
+      /* Tab content padding */
+      .tab-content { padding-top: 1rem; }
+      
+      /* Disclosure toggle for table */
+      .table-toggle-btn {
+        font-size: 0.82rem;
+        color: #2d6a9f;
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+    "))
+  ),
+  
+  # ── JavaScript for contingent category dropdowns ───────────────────────────
   tags$head(tags$script(HTML("
-    // Map of flow -> allowed categories
     var categoryMap = {
       'imports':    ['new', 'recovered', 'feedstock'],
       'exports':    ['new', 'recovered'],
       'production': ['produced', 'feedstock_produced', 'destroyed']
     };
-
-    // Column indices (0-based): flow=2, category=3
     var FLOW_COL = 2;
     var CAT_COL  = 3;
 
     function updateCategoryDropdown(hot, row) {
       var flowVal = hot.getDataAtCell(row, FLOW_COL);
       var allowed = categoryMap[flowVal] || [];
-      
-      // Get current category value; clear if no longer valid
-      var curCat = hot.getDataAtCell(row, CAT_COL);
+      var curCat  = hot.getDataAtCell(row, CAT_COL);
       if (allowed.length > 0 && !allowed.includes(curCat)) {
         hot.setDataAtCell(row, CAT_COL, allowed[0]);
       }
-
-      // Update the column meta for this cell to restrict dropdown
-      // We use cell-level meta overrides
       hot.setCellMeta(row, CAT_COL, 'source', allowed);
       hot.render();
     }
 
-    // Hook into rhandsontable after it renders
     $(document).on('shiny:value', function(e) {
       if (e.name !== 'kigali_input_table') return;
-      
       setTimeout(function() {
-        var container = document.getElementById('kigali_input_table');
+        var container  = document.getElementById('kigali_input_table');
         if (!container) return;
         var hot = container.querySelector('.handsontable');
         if (!hot || !hot.hotInstance) return;
         var htInstance = hot.hotInstance;
-
-        // Apply to all existing rows
         var nrows = htInstance.countRows();
-        for (var r = 0; r < nrows; r++) {
-          updateCategoryDropdown(htInstance, r);
-        }
-
-        // Listen for changes
+        for (var r = 0; r < nrows; r++) { updateCategoryDropdown(htInstance, r); }
         htInstance.addHook('afterChange', function(changes, source) {
           if (!changes) return;
           changes.forEach(function(change) {
-            var row = change[0], col = change[1];
-            if (col === FLOW_COL) {
-              updateCategoryDropdown(htInstance, row);
-            }
+            if (change[1] === FLOW_COL) updateCategoryDropdown(htInstance, change[0]);
           });
         });
       }, 300);
     });
   "))),
   
-  sidebarLayout(
-    sidebarPanel(
-      selectInput("country", 
-                  "Select Country:", 
-                  choices = sort(unique(edgar$name)),
-                  selected = NULL),
-      width = 3
+  # ── Country selector (persistent, in navbar) ───────────────────────────────
+  nav_spacer(),
+  nav_item(
+    div(
+      style = "padding: 0.25rem 0.5rem;",
+      tags$label(`for` = "country", class = "control-label", "Country"),
+      selectInput(
+        "country",
+        label    = NULL,
+        choices  = sort(unique(edgar$name)),
+        selected = NULL,
+        width    = "220px"
+      )
+    )
+  ),
+  
+  # ── TAB 1: Scoping Statement ───────────────────────────────────────────────
+  nav_panel(
+    "Scoping Statement",
+    icon = icon("chart-line"),
+    
+    # Instructions accordion
+    accordion(
+      id    = "instructions_accordion",
+      open  = FALSE,
+      accordion_panel(
+        "Instructions & Guidance",
+        icon = icon("circle-info"),
+        div(
+          style = "max-width: 860px;",
+          p(tags$strong("Placeholder:"), " Step-by-step guidance will go here.
+            This section will walk users through interpreting the scoping data,
+            understanding the emissions estimates, and navigating the tool workflow."),
+          tags$ul(
+            tags$li("Step 1: Select a country from the dropdown in the top-right."),
+            tags$li("Step 2: Review historical HFC emissions patterns in the Scoping Statement tab."),
+            tags$li("Step 3: Enter Kigali reporting data in the Kigali Data tab."),
+            tags$li("Step 4: Generate emissions estimates in the Emissions tab.")
+          )
+        )
+      )
     ),
     
-    mainPanel(
-      tabsetPanel(
-        
-        # Tab 1: Scoping Statement
-        tabPanel("Scoping Statement",
-                 fluidRow(column(12, h4("Time Series Data"), DT::DTOutput("timeseries_table"))),
-                 br(),
-                 fluidRow(column(12, plotOutput("line_plot", height = "400px"))),
-                 br(),
-                 fluidRow(
-                   column(6, plotOutput("treemap_app", height = "400px")),
-                   column(6, sunburstOutput("sunburst_subapp", height = "400px"))
-                 )
-        ),
-        
-        # Tab 2: Kigali Data (single consolidated tab)
-        tabPanel("Kigali Data",
-                 br(),
-                 h4("Enter Kigali Reporting Data"),
-                 helpText("Enter all production, import, and export data below. 
-                           Right-click for options to add/remove rows. 
-                           Category options update automatically based on the selected Flow."),
-                 rHandsontableOutput("kigali_input_table"),
-                 br(),
-                 actionButton("calc_kigali", "Calculate Totals", class = "btn-primary"),
-                 br(), br(),
-                 h4("Calculated Totals"),
-                 DTOutput("kigali_totals_table")
-        ),
-        
-        # Tab 3: Emissions
-        tabPanel("Emissions",
-                 fluidRow(
-                   column(width = 12,
-                          h3("HFC Emissions Estimates"),
-                          actionButton("calculate_emissions", "Calculate Emissions", 
-                                       class = "btn-primary"),
-                          br(), br(),
-                          DTOutput("emissions_table")
-                   )
-                 )
+    # Main visuals row
+    layout_columns(
+      col_widths = c(7, 5),
+      
+      # Line chart card
+      card(
+        card_header("HFC Emissions Over Time"),
+        card_body(
+          padding = "0.5rem",
+          plotOutput("line_plot", height = "380px")
         )
-        
       ),
-      width = 9
+      
+      # Sunburst card
+      card(
+        card_header("Emissions by Application"),
+        card_body(
+          padding = "0.5rem",
+          sunburstOutput("sunburst_subapp", height = "380px")
+        )
+      )
+    ),
+    
+    # Collapsible time series table
+    accordion(
+      id   = "table_accordion",
+      open = FALSE,
+      accordion_panel(
+        "Time Series Data",
+        icon = icon("table"),
+        card_body(
+          padding = "0.25rem",
+          DT::DTOutput("timeseries_table")
+        )
+      )
+    )
+  ),
+  
+  # ── TAB 2: Kigali Data ────────────────────────────────────────────────────
+  nav_panel(
+    "Kigali Data",
+    icon = icon("file-import"),
+    
+    card(
+      card_header("Kigali Reporting Data Entry"),
+      card_body(
+        p(class = "text-muted", style = "font-size: 0.85rem; margin-bottom: 0.75rem;",
+          "Enter all production, import, and export data below.",
+          "Right-click for options to add or remove rows.",
+          "Category options update automatically based on the selected Flow."),
+        rHandsontableOutput("kigali_input_table"),
+        br(),
+        actionButton("calc_kigali", "Calculate Totals", class = "btn-primary")
+      )
+    ),
+    
+    card(
+      card_header("Calculated Totals"),
+      card_body(DTOutput("kigali_totals_table"))
+    )
+  ),
+  
+  # ── TAB 3: Emissions ──────────────────────────────────────────────────────
+  nav_panel(
+    "Emissions",
+    icon = icon("smog"),
+    
+    card(
+      card_header("HFC Emissions Estimates"),
+      card_body(
+        actionButton("calculate_emissions", "Calculate Emissions", class = "btn-primary"),
+        br(), br(),
+        DTOutput("emissions_table")
+      )
     )
   )
 )
-
 # Server----------------------------
 server <- function(input, output, session) {
   
