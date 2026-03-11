@@ -613,7 +613,7 @@ server <- function(input, output, session) {
       mutate(co2_eq = gwp * hfc_emissions,
              year   = as.numeric(as.character(year))) %>%
       group_by(year, application, sub_application) %>%
-      summarize(mmt_co2_eq = sum(co2_eq, na.rm = TRUE) / 10^6, .groups = "drop") %>%
+      summarize(mmt_co2_eq = sum(co2_eq, na.rm = TRUE) / 10^3, .groups = "drop") %>%
       ungroup()
   })
   
@@ -820,16 +820,28 @@ server <- function(input, output, session) {
     # Pivot to wide format (year x component)
     imports_df <- kd %>%
       filter(flow == "imports") %>%
+      # Make feedstock uses negative to subtract from sum
+      mutate(quantity = case_when(
+        category == "feedstock" ~ -quantity,
+        .default = quantity)
+        ) %>%
       group_by(year, component) %>%
       summarize(imports = sum(quantity, na.rm = TRUE), .groups = "drop")
     
     exports_df <- kd %>%
       filter(flow == "exports") %>%
+      # Subtract exports by making them negative
+      mutate(quantity = -quantity) %>%
       group_by(year, component) %>%
       summarize(exports = sum(quantity, na.rm = TRUE), .groups = "drop")
     
     prod_df <- kd %>%
       filter(flow == "production") %>%
+      # Make feedstock and destruction negative to subtract from sum
+      mutate(quantity = case_when(
+        category %in% c("feedstock_produced", "destroyed") ~ -quantity,
+        .default = quantity)
+      ) %>%
       group_by(year, component) %>%
       summarize(prod = sum(quantity, na.rm = TRUE), .groups = "drop")
     
@@ -870,7 +882,8 @@ server <- function(input, output, session) {
     process_all_components(emissions_input, uncertainty, 
                            group_vars = c("component", "meta_application"))
   })
-  
+    
+    
   output$emissions_table <- renderDT({
     req(emissions_data())
     datatable(
