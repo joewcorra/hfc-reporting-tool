@@ -50,12 +50,12 @@ get_abs_hfc_consumption <- function(scoping_data, velders) {
       sub_application %in% c("other f-gas use", "other ods") ~ "other")
     ) %>%
     left_join(velders, by = "velders_application") %>%
-    mutate(meta_application = case_when(
+    mutate(application = case_when(
       str_detect(velders_application, "refrigeration|conditioning") ~ "refrigeration and air conditioning",
       str_detect(velders_application, "foam") ~ "foam",
       velders_application == "fire extinguishers" ~ "fire protection",
       .default = velders_application)) %>%
-    group_by(year, meta_application, velders_application) %>%
+    group_by(year, application, velders_application) %>%
     # Replace default emission factor NA values with 1 
     replace_na(list(emission_factor_dev_countries = 1)) %>%
     summarize(consumption_by_sector = sum(mmt_co2_eq / 
@@ -64,7 +64,7 @@ get_abs_hfc_consumption <- function(scoping_data, velders) {
     ungroup() %>%
     mutate(consumption_total = sum(consumption_by_sector, 
                                    na.rm = TRUE), .by = year) %>%
-    group_by(year, meta_application) %>%
+    group_by(year, application) %>%
     summarize(consumption_share = sum(consumption_by_sector) / 
                 sum(consumption_total)) %>%
     ungroup()
@@ -198,7 +198,7 @@ process_component <- function(component_data, uncertainties, scenario = "point")
 
 # Main processing function
 process_all_components <- function(kigali_data, uncertainty_data, 
-                                   group_vars = c("component", "meta_application")) {
+                                   group_vars = c("component", "application")) {
   # Prepare uncertainty data
   uncertainties <- kigali_data %>%
     left_join(
@@ -876,11 +876,11 @@ server <- function(input, output, session) {
         hfc_defaults %>% rename(component = hfc),
         by = "component"
       ) %>%
-      arrange(meta_application, component, year)
+      arrange(application, component, year)
     
     # --- Step 3: Run emissions model for each (component x application) slice ---
     process_all_components(emissions_input, uncertainty, 
-                           group_vars = c("component", "meta_application"))
+                           group_vars = c("component", "application"))
   })
     
     
@@ -888,7 +888,7 @@ server <- function(input, output, session) {
     req(emissions_data())
     datatable(
       emissions_data() %>%
-        select(year, component, meta_application, consumption_share,
+        select(year, component, application, consumption_share,
                total_emissions, total_emissions_lower, total_emissions_upper) %>%
         mutate(across(where(is.numeric), ~round(.x, 4))),
       options    = list(dom = "Bfrtip", buttons = c("copy", "csv", "excel"),
