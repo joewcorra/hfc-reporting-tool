@@ -1,0 +1,146 @@
+---
+title: "code_narrative"
+format: docx
+editor: visual
+---
+
+## Methodology: HFC Consumption-Based Emissions Estimation — Full Tool 
+
+This script implements a Shiny web application for estimating HFC emissions from national Kigali Amendment reporting data. The primary inputs are: reference emissions data from the EDGAR and Velders databases (loaded at startup), user-uploaded Kigali reporting data (imports, exports, and production by HFC compound and category), and a set of default emissions parameters and uncertainty values stored in a local data repository. The primary output is a table of estimated HFC emissions disaggregated by compound, application sector, and year, with associated lower and upper uncertainty bounds.
+
+---
+
+### Phase 1: Reference Data and Initialization
+
+1. Six reference datasets are loaded from a local data repository at application startup: EDGAR emissions data, Velders application-sector shares, uncertainty parameters, mixture compositions, application sector definitions, and HFC default parameters (emission factors, equipment lifetimes, etc.).
+
+2. Initial bank conditions are set for the emissions model. The equipment bank is initialized to zero at the start of the model period, and a ten-year history of bank additions is initialized to zero. These values represent the assumption that no refrigerant bank exists prior to the first reporting year.
+
+> **Reviewer note:** The ten-year bank history window reflects an assumed average equipment lifetime. Please confirm whether this window length is appropriate for the HFC compounds and applications covered in this analysis.
+
+---
+
+### Phase 2: Scoping Data Preparation
+
+3. When a country is selected, the EDGAR emissions dataset is filtered to that country and joined to the application sector classification table. Emissions are converted to CO₂-equivalent units:
+   - 3.1. CO₂-equivalent emissions = HFC mass emissions × global warming potential (GWP)
+   - 3.2. Results are converted to million metric tonnes CO₂-equivalent (MMT CO₂e) by dividing by 10³
+   - 3.3. Values are aggregated by year, application sector, and sub-application sector
+
+4. Application-sector consumption shares are derived from the scoping data using the following procedure:
+   - 4.1. Each sub-application category is mapped to its corresponding Velders classification (e.g., "domestic refrigeration," "mobile air conditioning," "closed cell foam")
+   - 4.2. The scoping data is joined to the Velders emission factor table on this classification
+   - 4.3. Where no emission factor is available, a value of 1 is substituted
+
+   > **Reviewer note:** Substituting an emission factor of 1 where data are missing is a simplifying assumption. Please confirm this is acceptable, and identify which sub-applications, if any, are expected to be missing Velders emission factors.
+
+   - 4.4. Consumption by sector is calculated as:
+     - Consumption by sector = sum of (CO₂-equivalent emissions ÷ emission factor) for all sub-applications within the sector, by year
+   - 4.5. Total consumption across all sectors is calculated by year
+   - 4.6. Sector consumption share = consumption by sector ÷ total consumption, by year
+
+> **Reviewer note:** Sector shares are currently applied uniformly across all HFC compounds. The methodology does not yet account for compound-specific application distributions. Please confirm whether this uniform-share assumption is acceptable for the current analysis.
+
+---
+
+### Phase 3: Kigali Reporting Data Ingestion
+
+5. The user uploads a CSV file containing Kigali reporting data. The file is validated for the presence of five required columns: year, HFC identifier, flow type, category, and quantity. A status message is displayed indicating success, missing columns, or a file read error.
+
+6. Upon user confirmation, the uploaded data is processed as follows:
+   - 6.1. Column types are standardized (year as integer, quantity as numeric, remaining fields as text)
+   - 6.2. Records with blank HFC identifiers or zero/missing quantities are removed
+   - 6.3. Mixture HFCs (e.g., blends) are identified and expanded into their constituent pure compounds:
+     - Constituent quantity = mixture quantity × component fraction
+   - 6.4. Pure component records are retained as-is
+   - 6.5. All records are aggregated by year, compound, flow type, and category:
+     - Total quantity = sum of quantities for each year × compound × flow × category combination
+
+---
+
+### Phase 4: Emissions Calculation
+
+7. Flow quantities are prepared from the processed Kigali data. Each flow type is handled separately:
+
+   **Imports:**
+   - 7.1. Feedstock imports are subtracted from gross imports (feedstock does not enter the equipment bank):
+     - Net imports = gross imports − feedstock imports
+
+   **Exports:**
+   - 7.2. Export quantities are sign-reversed to represent outflows:
+     - Net exports = −(reported export quantity)
+
+   **Production:**
+   - 7.3. Feedstock production is subtracted from gross production:
+     - Net production = gross production − feedstock production
+   - 7.4. Quantities reported as "destroyed" under the production flow are extracted into a separate destroyed quantity field. These are not subtracted from production; instead they are passed directly to the end-of-life emissions equation in a later step.
+
+   > **Reviewer note:** The separation of "destroyed" quantities from production is methodologically significant. Treating destroyed quantities as a reduction in consumption (rather than a credit against end-of-life emissions) would understate the equipment bank and distort emission estimates. Please confirm this treatment is consistent with the intended IPCC methodology.
+
+8. The four flow tables (imports, exports, production, destroyed) are combined into a single wide-format table matched on year and compound. Missing values for any flow in a given year are set to zero.
+
+9. Each flow quantity is partitioned by application sector using the shares derived in Phase 2. For each compound and year, the nearest available scoping data year is identified and its shares applied:
+   - 9.1. Sector-partitioned imports = net imports × sector consumption share
+   - 9.2. Sector-partitioned exports = net exports × sector consumption share
+   - 9.3. Sector-partitioned production = net production × sector consumption share
+   - 9.4. Sector-partitioned destroyed = destroyed quantity × sector consumption share
+
+   > **Reviewer note:** Destroyed quantities are partitioned by the same sector shares as other flows, as no application-specific destruction data are available. Please confirm this is an acceptable approximation.
+
+10. Default emissions parameters (emission factor for installed base, destruction rate at end of life, and other compound-specific values) are joined to the partitioned data, matched on HFC compound.
+
+---
+
+### Phase 5: Bank and Emissions Model
+
+The following steps are applied independently to each unique combination of HFC compound and application sector, and repeated sequentially for each year in the reporting period, carrying forward the equipment bank state from one year to the next.
+
+**Uncertainty scenarios:** The model is run three times for each compound-sector combination — a point estimate, a lower bound, and an upper bound — using the uncertainty parameters described below. For the lower bound, imports and production are reduced while exports are increased; emission factors and destruction rates are reduced. For the upper bound, the opposite adjustments are applied.
+
+> **Reviewer note:** Uncertainty adjustments are applied to the Kigali flow data using a single uncertainty parameter (u_kigali) for imports, production, exports, and destroyed quantities. Separate uncertainty parameters are used for the emission factor (u_ef_installed_base) and destruction rate (u_destruction). Please confirm that these uncertainty parameter values are documented and reviewed separately.
+
+11. For each year, domestic sales are calculated as:
+    - 11.1. Domestic sales = sector-partitioned imports + sector-partitioned production − sector-partitioned exports
+
+12. In-use equipment emissions (leakage from the existing bank) are calculated as:
+    - 12.1. In-use equipment emissions = bank at start of year × emission factor (installed base)
+
+13. Servicing demand is determined as the greater of domestic sales or in-use equipment emissions:
+    - 13.1. Servicing = maximum(domestic sales, in-use equipment emissions)
+    - This reflects the constraint that servicing cannot exceed available supply, nor can supply exceed servicing demand.
+
+14. New equipment filling and associated emissions are calculated as:
+    - 14.1. New equipment filling = domestic sales − servicing
+    - 14.2. Filling emissions = new equipment filling × emission factor (filling)
+
+    > **Reviewer note:** The emission factor for new equipment filling is currently set to zero, meaning no emissions are assumed to occur during the equipment charging process. Please confirm whether this is the intended assumption or a placeholder pending data availability.
+
+    - 14.3. Refrigerant contained in new equipment = new equipment filling − filling emissions
+
+15. End-of-life emissions are calculated from equipment reaching retirement. The retiring cohort is taken from the oldest entry in the ten-year bank history:
+    - 15.1. Retired equipment refrigerant = oldest cohort in bank history
+    - 15.2. Reclaimed refrigerant = retired equipment refrigerant × destruction/reclamation rate
+    - 15.3. End-of-life emissions = retired equipment refrigerant − reclaimed − destroyed (reported) − exported used equipment
+
+    > **Reviewer note:** Exported used equipment is currently set to zero. Please confirm whether this is intentional or a deferred data requirement.
+
+16. The equipment bank is updated for the next year:
+    - 16.1. Bank at end of year = bank at start of year + refrigerant contained in new equipment + servicing − in-use equipment emissions − retired equipment refrigerant
+    - 16.2. The ten-year bank history is updated by appending the current year's new equipment contained quantity and dropping the oldest cohort
+
+17. Total emissions for the year are calculated as:
+    - 17.1. Total emissions = filling emissions + in-use equipment emissions + end-of-life emissions
+
+---
+
+### Phase 6: Uncertainty Bounds and Output Assembly
+
+18. The three scenario runs (point, lower, upper) are combined into a single results table. For each compound-sector-year record, the lower and upper scenario values for total emissions, in-use emissions, and end-of-life emissions are appended as additional columns alongside the point estimates.
+
+19. The results table is displayed, showing year, compound, application sector, consumption share, point-estimate total emissions, and lower and upper uncertainty bounds. All numeric values are rounded to four decimal places.
+
+---
+
+**Summary and open questions:** The methodology relies on three categories of assumptions that reviewers should examine closely: (1) uniform application-sector shares applied across all HFC compounds, pending compound-specific Velders data; (2) several deferred data requirements currently set to zero, including new equipment import/export flows, filling emission factors, and exported used equipment; and (3) the treatment of destroyed quantities as an end-of-life credit rather than a consumption reduction. The internal emissions model (`calc_year` and `process_all_components`) is fully narrated above, but the uncertainty parameter values themselves are stored in the reference dataset and should be reviewed and documented separately.
+
+---
