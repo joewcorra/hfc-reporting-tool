@@ -86,10 +86,7 @@ access and wish to contribute, please open an issue or submit a pull request.
 
 ## Contact
 
-[Your name / EPA office / contact info]
+Joe Corra
 
 ---
 
-## License
-
-[TBD — confirm with EPA open source policy]
