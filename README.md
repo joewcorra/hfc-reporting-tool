@@ -84,9 +84,10 @@ access and wish to contribute, please open an issue or submit a pull request.
 
 ---
 
-## Contact
+## Development 
 
-Joe Corra
+Joe Corra and Karen Place
+Corresponding Developer: Joe Corra
 
 ---
 
