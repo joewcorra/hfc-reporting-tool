@@ -79,14 +79,14 @@ This tool is under active development. Current priorities:
 
 ## Contributing
 
-This is currently a private repository for EPA collaborators. If you have 
-access and wish to contribute, please open an issue or submit a pull request.
+If you wish to contribute, please open an issue or submit a pull request.
 
 ---
 
 ## Development 
 
 Joe Corra and Karen Place
+
 Corresponding Developer: Joe Corra
 
 ---
